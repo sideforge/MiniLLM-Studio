@@ -169,4 +169,5 @@ class GPT(nn.Module):
         no_decay = [p for n, p in self.named_parameters() if p.requires_grad and p.ndim < 2]
         groups = [{"params": decay, "weight_decay": weight_decay},
                   {"params": no_decay, "weight_decay": 0.0}]
-        return torch.optim.AdamW(groups, lr=lr, betas=betas)
+        on_cuda = next(self.parameters()).is_cuda     # "fused" = ein einziger GPU-Kernel für den ganzen Update-Schritt
+        return torch.optim.AdamW(groups, lr=lr, betas=betas, fused=True if on_cuda else None)

@@ -93,3 +93,56 @@ def test_generate_text_runs():
     m = GPT(GPTConfig(vocab_size=tok.vocab_size, block_size=16, n_layer=1, n_head=2, n_embd=32))
     out = generate_text(m, tok, "the cat", max_new_tokens=10, seed=1)
     assert out.startswith("the cat")
+
+
+# ----------------------------------------------------------------- Gerät / GPU
+def test_device_selection_falls_back_to_cpu():
+    from minillm import device as dev
+    assert dev.pick_device("cpu").type == "cpu"
+    d = dev.pick_device("auto")                      # auf einem Rechner ohne GPU: CPU, sonst die GPU
+    assert d.type in ("cpu", "cuda", "xpu", "mps")
+    assert dev.describe(torch.device("cpu"))["type"] == "cpu"
+    assert dev.amp_dtype(torch.device("cpu")) is None
+    with dev.autocast(torch.device("cpu"), True):    # auf der CPU ein No-Op
+        pass
+
+
+def test_find_max_batch_on_cpu_returns_start():
+    from minillm import device as dev
+    assert dev.find_max_batch(small_model, 16, 300, torch.device("cpu"), start=16) == 16
+
+
+def test_gpu_batcher_indexing_matches_cpu_path(tmp_path):
+    """Der GPU-Weg (Daten als Tensor, Fenster per Index) muss dasselbe liefern wie der CPU-Weg (hier auf CPU simuliert)."""
+    from minillm.data import Batcher
+    ids = (np.arange(500) % 251).astype(np.uint16)
+    ids.tofile(tmp_path / "train.bin")
+    ids[:100].tofile(tmp_path / "val.bin")
+    b = Batcher(tmp_path, 16)
+    b._dev = {"train": torch.from_numpy(b.train.astype(np.int32)), "val": torch.from_numpy(b.val.astype(np.int32))}
+    b._arange = torch.arange(16)
+    x, y = b.get("train", 8)
+    assert x.shape == y.shape == (8, 16) and x.dtype == torch.long
+    assert torch.equal(x[:, 1:], y[:, :-1])          # y ist x um ein Token verschoben
+
+
+def test_short_training_run_with_auto_batch(tmp_path, monkeypatch):
+    """Ganzer Trainer-Durchlauf (CPU), inkl. Auto-Batch und gepufferten Metriken."""
+    import time
+    from minillm import trainer as trainer_mod
+    from minillm.data import prepare
+    monkeypatch.setattr(trainer_mod, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr("minillm.data.PREPARED_DIR", tmp_path / "prepared")
+    docs = {"x": [CORPUS[0], CORPUS[1], CORPUS[2]] * 12}
+    meta = prepare("t", docs, 300)
+    cfg = GPTConfig(vocab_size=meta["vocab_size"], block_size=16, n_layer=1, n_head=2, n_embd=32)
+    tr = trainer_mod.Trainer("t", tmp_path / "prepared" / "t", cfg,
+                             trainer_mod.TrainConfig(batch_size=0, max_steps=30, eval_interval=10, sample_interval=15,
+                                                     eval_iters=2, device="cpu"))
+    tr.start()
+    while tr.is_running:
+        time.sleep(0.2)
+    assert tr.status == "fertig", tr.error
+    assert tr.cfg.batch_size == 16                    # Auto auf der CPU
+    assert [m["step"] for m in tr.metrics] == list(range(1, 31))
+    assert (tmp_path / "runs" / "t" / "model.pt").exists()

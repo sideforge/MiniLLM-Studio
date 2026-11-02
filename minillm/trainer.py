@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from . import device as dev
 from .data import Batcher
 from .generate import attention_maps, generate_text
 from .model import GPT, GPTConfig
@@ -26,7 +27,7 @@ PROBE_TEXT = "Once upon a time, there was a little girl named Lily. She loved to
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 16
+    batch_size: int = 16             # 0 = automatisch: auf der GPU so gross wie der Speicher erlaubt
     max_steps: int = 1000
     lr: float = 3e-3
     min_lr_ratio: float = 0.1
@@ -37,7 +38,9 @@ class TrainConfig:
     eval_iters: int = 10
     sample_interval: int = 200
     seed: int = 1337
-    threads: int = 0                 # 0 = automatisch
+    threads: int = 0                 # CPU-Threads, 0 = automatisch (nur relevant ohne GPU)
+    device: str = "auto"             # "auto" = beste GPU, sonst CPU; "cpu" erzwingt die CPU
+    amp: bool = True                 # Mixed Precision (bf16/fp16) auf der GPU
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,6 +87,8 @@ class Trainer:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.model: GPT | None = None
+        self.device = torch.device("cpu")
+        self.device_info: dict = {}
         self.tok: BPETokenizer | None = None
 
     # ------------------------------------------------------------------ Steuerung
@@ -108,7 +113,8 @@ class Trainer:
             losses = []
             for _ in range(self.cfg.eval_iters):
                 x, y = batcher.get(split, self.cfg.batch_size, gen)
-                _, loss = self.model(x, y)
+                with dev.autocast(self.device, self.cfg.amp):
+                    _, loss = self.model(x, y)
                 losses.append(loss.item())
             out[split] = float(np.mean(losses))
         self.model.train()
@@ -120,7 +126,7 @@ class Trainer:
         meta = json.loads((self.prepared_dir / "meta.json").read_text(encoding="utf-8"))
         counts = np.array(meta["token_counts"])
         top = np.argsort(-counts)[:150]
-        w = self.model.tok_emb.weight.detach()[torch.from_numpy(top)]
+        w = self.model.tok_emb.weight.detach().float().cpu()[torch.from_numpy(top)]
         w = w - w.mean(0, keepdim=True)
         try:
             u, s, v = torch.pca_lowrank(w, q=2, center=False)
@@ -144,7 +150,7 @@ class Trainer:
     def save_checkpoint(self, name: str = "model.pt") -> None:
         assert self.model is not None
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        torch.save({"model": self.model.state_dict(), "model_cfg": self.model_cfg.to_dict(),
+        torch.save({"model": {k: v.detach().cpu() for k, v in self.model.state_dict().items()}, "model_cfg": self.model_cfg.to_dict(),
                     "train_cfg": self.cfg.to_dict(), "step": self.step}, self.run_dir / name)
 
     def _write_run_json(self) -> None:
@@ -155,6 +161,7 @@ class Trainer:
             "final_train": self.evals[-1]["train"] if self.evals else None,
             "data": self.prepared_dir.name, "model_cfg": self.model_cfg.to_dict(),
             "train_cfg": self.cfg.to_dict(), "finished": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "device": self.device_info.get("name", "CPU"),
         }
         (self.run_dir / "run.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
 
@@ -165,52 +172,83 @@ class Trainer:
             cfg = self.cfg
             torch.manual_seed(cfg.seed)
             np.random.seed(cfg.seed)
-            threads = cfg.threads or max(1, min(8, (os.cpu_count() or 4)))
-            torch.set_num_threads(threads)
+            self.device = dev.pick_device(cfg.device)
+            self.device_info = dev.describe(self.device)
+            dev.setup(self.device)
+            if self.device.type == "cpu":
+                torch.set_num_threads(cfg.threads or max(1, min(8, (os.cpu_count() or 4))))
 
             self.run_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.prepared_dir / "tokenizer.json", self.run_dir / "tokenizer.json")
             self.tok = BPETokenizer.load(self.run_dir / "tokenizer.json")
-            batcher = Batcher(self.prepared_dir, self.model_cfg.block_size)
+            batcher = Batcher(self.prepared_dir, self.model_cfg.block_size).to(self.device)
             gen = torch.Generator().manual_seed(cfg.seed)
 
-            self.model = GPT(self.model_cfg)
+            if cfg.batch_size <= 0:        # automatisch: GPU voll auslasten
+                cfg.batch_size = dev.find_max_batch(lambda: GPT(self.model_cfg), self.model_cfg.block_size,
+                                                    self.model_cfg.vocab_size, self.device, cfg.amp)
+
+            self.model = GPT(self.model_cfg).to(self.device)
             self.n_params = self.model.num_params()
             opt = self.model.configure_optimizer(cfg.lr, cfg.weight_decay)
             self.model.train()
+            # fp16 braucht "Loss-Scaling"; bf16 und CPU nicht (dann ist der Scaler ein No-Op)
+            scaler = torch.amp.GradScaler(self.device.type, enabled=cfg.amp and dev.amp_dtype(self.device) == torch.float16
+                                          and self.device.type == "cuda")
 
             metrics_file = open(self.run_dir / "metrics.jsonl", "w", encoding="utf-8")
             self.start_time = time.time()
             self._on_eval(batcher, gen, metrics_file, first=True)
 
+            log_every = 1 if self.device.type == "cpu" else 10
+            pending: list[tuple] = []
+            last_flush = [time.time()]
+
+            def flush() -> None:
+                dev.sync(self.device)
+                now = time.time()
+                tokens = sum(p[4] for p in pending)
+                tok_s = tokens / max(1e-9, now - last_flush[0])
+                self.elapsed = now - self.start_time
+                for st, loss_t, gn_t, lr_, _ in pending:
+                    rec = {"step": st, "loss": float(loss_t), "lr": lr_, "grad_norm": float(gn_t),
+                           "tok_s": tok_s, "time": round(self.elapsed, 2)}
+                    self.metrics.append(rec)
+                    metrics_file.write(json.dumps({"type": "step", **rec}) + "\n")
+                pending.clear()
+                last_flush[0] = now
+
             for step in range(1, cfg.max_steps + 1):
                 if self._stop.is_set():
                     self.status = "gestoppt"
                     break
-                t0 = time.time()
                 lr = lr_at(step - 1, cfg)
                 for g in opt.param_groups:
                     g["lr"] = lr
                 x, y = batcher.get("train", cfg.batch_size, gen)
-                _, loss = self.model(x, y)
+                with dev.autocast(self.device, cfg.amp):
+                    _, loss = self.model(x, y)
                 opt.zero_grad(set_to_none=True)
-                loss.backward()
-                gnorm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), cfg.grad_clip).item()
-                opt.step()
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
+                gnorm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), cfg.grad_clip)
+                scaler.step(opt)
+                scaler.update()
 
-                n_tok = x.numel()
-                self.tokens_seen += n_tok
+                # Werte erst alle paar Schritte von der GPU holen: jedes .item() zwingt die GPU zum Warten
+                pending.append((step, loss.detach(), gnorm, lr, x.numel()))
+                self.tokens_seen += x.numel()
                 self.step = step
-                self.elapsed = time.time() - self.start_time
-                rec = {"step": step, "loss": loss.item(), "lr": lr, "grad_norm": gnorm,
-                       "tok_s": n_tok / max(1e-9, time.time() - t0), "time": round(self.elapsed, 2)}
-                self.metrics.append(rec)
-                metrics_file.write(json.dumps({"type": "step", **rec}) + "\n")
+                due = (step % cfg.eval_interval == 0 or step % cfg.sample_interval == 0 or step == cfg.max_steps)
+                if len(pending) >= log_every or due or self._stop.is_set():
+                    flush()
 
                 if step % cfg.eval_interval == 0 or step == cfg.max_steps:
                     self._on_eval(batcher, gen, metrics_file)
                 if step % cfg.sample_interval == 0 or step == cfg.max_steps:
                     self._on_sample()
+            if pending:
+                flush()
             if self.status == "läuft":
                 self.status = "fertig"
             self.elapsed = time.time() - self.start_time
@@ -271,10 +309,10 @@ def load_run_metrics(run_name: str) -> tuple[list[dict], list[dict]]:
     return steps, evals
 
 
-def load_model(run_name: str) -> tuple[GPT, BPETokenizer, dict]:
+def load_model(run_name: str, device: "torch.device | None" = None) -> tuple[GPT, BPETokenizer, dict]:
     d = RUNS_DIR / run_name
     ckpt = torch.load(d / "model.pt", map_location="cpu", weights_only=True)
     model = GPT(GPTConfig.from_dict(ckpt["model_cfg"]))
     model.load_state_dict(ckpt["model"])
-    model.eval()
+    model.to(device or dev.pick_device()).eval()      # zum Generieren ebenfalls die GPU nutzen
     return model, BPETokenizer.load(d / "tokenizer.json"), ckpt

@@ -38,17 +38,18 @@ def stream_generate(model: GPT, tok: BPETokenizer, prompt: str, max_new_tokens: 
     was_training = model.training
     model.eval()
     gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    device = next(model.parameters()).device
     ids = tok.encode(prompt) or [tok.eot_id]
-    x = torch.tensor([ids], dtype=torch.long)
+    x = torch.tensor([ids], dtype=torch.long, device=device)
     try:
         for _ in range(max_new_tokens):
             ctx = x[:, -model.cfg.block_size:]
             logits, _ = model(ctx)
-            last = logits[0, -1]
+            last = logits[0, -1].float().cpu()          # Würfeln passiert auf der CPU (nur ein Vokabular-Vektor)
             raw = F.softmax(last, dim=-1)
             probs = filter_logits(last, temperature, top_k, top_p)
             nxt = torch.multinomial(probs, 1, generator=gen)
-            x = torch.cat([x, nxt.view(1, 1)], dim=1)
+            x = torch.cat([x, nxt.view(1, 1).to(device)], dim=1)
             yield int(nxt), tok.decode([int(nxt)]), probs, raw
     finally:
         model.train(was_training)
@@ -65,9 +66,9 @@ def next_token_table(model: GPT, tok: BPETokenizer, prompt: str, k: int = 10) ->
     was_training = model.training
     model.eval()
     ids = tok.encode(prompt) or [tok.eot_id]
-    x = torch.tensor([ids[-model.cfg.block_size:]])
+    x = torch.tensor([ids[-model.cfg.block_size:]], device=next(model.parameters()).device)
     logits, _ = model(x)
-    probs = F.softmax(logits[0, -1], dim=-1)
+    probs = F.softmax(logits[0, -1].float().cpu(), dim=-1)
     top = torch.topk(probs, k)
     model.train(was_training)
     return [(tok.token_str(int(i)), float(p)) for p, i in zip(top.values, top.indices)]
@@ -79,9 +80,9 @@ def next_logits(model: GPT, tok: BPETokenizer, prompt: str) -> torch.Tensor:
     was_training = model.training
     model.eval()
     ids = tok.encode(prompt) or [tok.eot_id]
-    logits, _ = model(torch.tensor([ids[-model.cfg.block_size:]]))
+    logits, _ = model(torch.tensor([ids[-model.cfg.block_size:]], device=next(model.parameters()).device))
     model.train(was_training)
-    return logits[0, -1]
+    return logits[0, -1].float().cpu()
 
 
 @torch.no_grad()
@@ -90,7 +91,7 @@ def attention_maps(model: GPT, tok: BPETokenizer, text: str):
     was_training = model.training
     model.eval()
     ids = tok.encode(text)[-model.cfg.block_size:]
-    x = torch.tensor([ids])
+    x = torch.tensor([ids], device=next(model.parameters()).device)
     _, _, atts = model(x, return_attn=True)
     model.train(was_training)
-    return [tok.token_str(i) for i in ids], [a[0].cpu().numpy() for a in atts]
+    return [tok.token_str(i) for i in ids], [a[0].float().cpu().numpy() for a in atts]

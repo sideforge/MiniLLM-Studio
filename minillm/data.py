@@ -119,9 +119,27 @@ class Batcher:
             raise ValueError("Zu wenig Trainingsdaten für diese Kontextlänge – mehr Dokumente laden "
                              "oder die Kontextlänge verkleinern.")
 
+    def to(self, device: torch.device) -> "Batcher":
+        """Legt alle Tokens in den GPU-Speicher: Batches entstehen dann direkt dort, ohne Umweg über die CPU
+        (sonst wartet die GPU auf die Daten). Bei sehr grossen Datensätzen bleibt es bei der CPU."""
+        self.device = device
+        if device.type != "cpu" and len(self.train) + len(self.val) <= 400_000_000:
+            self._dev = {"train": torch.from_numpy(self.train.astype(np.int32)).to(device),
+                         "val": torch.from_numpy(self.val.astype(np.int32)).to(device)}
+            self._arange = torch.arange(self.block_size, device=device)
+        return self
+
+    device = torch.device("cpu")
+    _dev: dict | None = None
+
     def get(self, split: str, batch_size: int, gen: torch.Generator | None = None):
         data = self.train if split == "train" else self.val
+        if self._dev is not None:                                    # schneller Weg: alles auf der GPU
+            d = self._dev[split]
+            ix = torch.randint(len(data) - self.block_size - 1, (batch_size, 1), device=self.device)
+            idx = ix + self._arange[None, :]
+            return d[idx].long(), d[idx + 1].long()
         ix = torch.randint(len(data) - self.block_size - 1, (batch_size,), generator=gen)
         x = torch.stack([torch.from_numpy(data[i:i + self.block_size].astype(np.int64)) for i in ix])
         y = torch.stack([torch.from_numpy(data[i + 1:i + 1 + self.block_size].astype(np.int64)) for i in ix])
-        return x, y
+        return x.to(self.device), y.to(self.device)

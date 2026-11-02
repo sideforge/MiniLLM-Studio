@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 
+from minillm import device as dev
 from minillm.data import Batcher, prepared_path
 from minillm.model import GPT
 from minillm.trainer import RUNS_DIR, TrainConfig, Trainer, lr_at
@@ -16,7 +17,7 @@ from ui.common import PALETTE, fmt_int, fmt_time, hero, need_data, restore_state
 from ui.page_model import DEFAULTS as MODEL_DEFAULTS
 from ui.page_model import model_config
 
-DEFAULTS = dict(t_name="lauf-1", t_steps=1500, t_batch=16, t_lr=3e-3, t_warm=50, t_eval=50, t_sample=250,
+DEFAULTS = dict(t_name="lauf-1", t_steps=1500, t_batch="Auto", t_device="Auto (GPU wenn vorhanden)", t_amp=True, t_lr=3e-3, t_warm=50, t_eval=50, t_sample=250,
                 t_wd=0.1, t_clip=1.0, t_threads=0)
 LR_OPTIONS = [3e-4, 5e-4, 1e-3, 2e-3, 3e-3, 5e-3, 1e-2]
 VIEWS = ["📉 Kurven", "📝 Beispieltexte", "👁 Aufmerksamkeit", "🗺 Embeddings", "⚖️ Gewichte"]
@@ -24,30 +25,40 @@ VIEWS = ["📉 Kurven", "📝 Beispieltexte", "👁 Aufmerksamkeit", "🗺 Embed
 
 def _train_config() -> TrainConfig:
     s = st.session_state
-    return TrainConfig(batch_size=s["t_batch"], max_steps=s["t_steps"], lr=s["t_lr"], warmup_steps=s["t_warm"],
+    return TrainConfig(batch_size=0 if s["t_batch"] == "Auto" else s["t_batch"],
+                       device="cpu" if s["t_device"] == "CPU erzwingen" else "auto", amp=s["t_amp"], max_steps=s["t_steps"], lr=s["t_lr"], warmup_steps=s["t_warm"],
                        weight_decay=s["t_wd"], grad_clip=s["t_clip"], eval_interval=s["t_eval"],
                        sample_interval=s["t_sample"], threads=s["t_threads"])
 
 
-def _benchmark(meta: dict) -> float:
-    """Misst Tokens/Sekunde dieses Rechners mit dem aktuellen Modell (3 Trainingsschritte)."""
+def _benchmark(meta: dict) -> tuple[float, int, str]:
+    """Misst Tokens/Sekunde dieses Rechners mit dem aktuellen Modell (wenige Trainingsschritte).
+
+    Gibt (Tokens pro Sekunde, benutzte Batch-Grösse, Gerätename) zurück."""
     cfg = model_config(meta["vocab_size"])
     tcfg = _train_config()
-    model = GPT(cfg)
+    device = dev.pick_device(tcfg.device)
+    dev.setup(device)
+    if device.type == "cpu":
+        torch.set_num_threads(tcfg.threads or max(1, min(8, torch.get_num_threads())))
+    bs = tcfg.batch_size or dev.find_max_batch(lambda: GPT(cfg), cfg.block_size, cfg.vocab_size, device, tcfg.amp)
+    model = GPT(cfg).to(device)
     opt = model.configure_optimizer(tcfg.lr, tcfg.weight_decay)
-    b = Batcher(prepared_path(meta["name"]), cfg.block_size)
-    torch.set_num_threads(tcfg.threads or max(1, min(8, torch.get_num_threads())))
+    b = Batcher(prepared_path(meta["name"]), cfg.block_size).to(device)
     speeds = []
-    for i in range(4):
-        x, y = b.get("train", tcfg.batch_size)
+    for i in range(5):
+        x, y = b.get("train", bs)
+        dev.sync(device)
         t0 = time.time()
-        _, loss = model(x, y)
+        with dev.autocast(device, tcfg.amp):
+            _, loss = model(x, y)
         opt.zero_grad()
         loss.backward()
         opt.step()
+        dev.sync(device)
         if i > 0:
             speeds.append(x.numel() / (time.time() - t0))
-    return float(np.mean(speeds))
+    return float(np.mean(speeds)), bs, dev.describe(device)["name"]
 
 
 def render() -> None:
@@ -64,8 +75,9 @@ def render() -> None:
         a.text_input("Name des Laufs", key="t_name", disabled=running)
         b.slider("Trainingsschritte", 100, 20000, step=100, key="t_steps", disabled=running,
                  help="Ein Schritt = ein Batch wird verarbeitet und die Gewichte werden einmal angepasst.")
-        c.select_slider("Batch-Grösse", [4, 8, 16, 32, 64], key="t_batch", disabled=running,
-                        help="Wie viele Textfenster pro Schritt gleichzeitig gelernt werden.")
+        c.select_slider("Batch-Grösse", ["Auto", 4, 8, 16, 32, 64, 128, 256, 512], key="t_batch", disabled=running,
+                        help="Wie viele Textfenster pro Schritt gleichzeitig gelernt werden. „Auto“ nimmt auf der GPU "
+                             "so viel, wie in den Grafikspeicher passt (maximale Auslastung).")
         a, b, c = st.columns(3)
         a.select_slider("Lernrate (max.)", LR_OPTIONS, key="t_lr", format_func=lambda x: f"{x:g}", disabled=running,
                         help="Wie gross die Schritte beim Verbessern sind. Zu gross → instabil, zu klein → langsam.")
@@ -75,7 +87,18 @@ def render() -> None:
         a.slider("Beispieltext alle … Schritte", 50, 2000, step=50, key="t_sample", disabled=running)
         b.slider("Weight Decay", 0.0, 0.3, step=0.01, key="t_wd", disabled=running)
         c.slider("Gradient Clipping", 0.1, 5.0, step=0.1, key="t_clip", disabled=running)
-        st.slider("CPU-Threads (0 = automatisch)", 0, 16, key="t_threads", disabled=running)
+        d1, d2, d3 = st.columns(3)
+        d1.selectbox("Rechengerät", ["Auto (GPU wenn vorhanden)", "CPU erzwingen"], key="t_device", disabled=running)
+        d2.checkbox("Mixed Precision (schneller auf GPU)", key="t_amp", disabled=running,
+                    help="Rechnet mit 16-Bit-Zahlen: halb so viel Speicher, auf GPUs oft 2–3× schneller.")
+        d3.slider("CPU-Threads (0 = automatisch)", 0, 16, key="t_threads", disabled=running)
+        info = dev.describe(dev.pick_device("cpu" if st.session_state["t_device"] == "CPU erzwingen" else "auto"))
+        if info["type"] == "cpu":
+            st.warning(f"⚪ **CPU** – {info['hint']}")
+        else:
+            mem = f" · {info['memory_gb']:.0f} GB" if info["memory_gb"] else ""
+            st.success(f"🟢 **GPU: {info['name']}**{mem} · {str(info['amp']).replace('torch.', '')} · "
+                       "wird automatisch voll ausgelastet")
         save_state("train")
         save_state("model")
 
@@ -88,9 +111,9 @@ def render() -> None:
         bc1, bc2, bc3 = st.columns([1, 1, 2])
         if bc1.button("⏱ Dauer schätzen", disabled=running):
             with st.spinner("Messe Geschwindigkeit …"):
-                speed = _benchmark(meta)
-            total_tok = st.session_state["t_steps"] * st.session_state["t_batch"] * cfg.block_size
-            st.session_state["_eta_msg"] = (f"Dieser Rechner schafft ca. **{speed:,.0f} Tokens/s** → "
+                speed, bs, devname = _benchmark(meta)
+            total_tok = st.session_state["t_steps"] * bs * cfg.block_size
+            st.session_state["_eta_msg"] = (f"**{devname}** schafft mit Batch {bs} ca. **{speed:,.0f} Tokens/s** → "
                                             f"{st.session_state['t_steps']} Schritte dauern etwa **{fmt_time(total_tok / speed)}** "
                                             f"({total_tok / meta['tokens_train']:.1f} Durchläufe durch die Daten).")
         if bc2.button("▶️ Training starten", type="primary", disabled=running):
@@ -152,6 +175,10 @@ def _dashboard() -> None:
                  delta=f"{val_delta:+.3f}" if val_delta is not None else None, delta_color="inverse")
     r2[2].metric("Perplexity", f"{np.exp(min(val, 20)):.1f}" if len(ev) else "–",
                  help="e^Val-Loss: zwischen so vielen Tokens schwankt das Modell im Schnitt.")
+    di = trainer.device_info
+    if di:
+        st.caption(f"Gerät: **{di['name']}**" + (f" ({di['memory_gb']:.0f} GB)" if di.get("memory_gb") else "")
+                   + f" · Batch {cfg.batch_size} · Mixed Precision: {'ja' if cfg.amp and di.get('amp') else 'nein'}")
     st.progress(min(1.0, trainer.step / cfg.max_steps),
                 text=f"{trainer.tokens_seen:,} Tokens gesehen · {trainer.n_params:,} Parameter · "
                      f"Laufzeit {fmt_time(trainer.elapsed)}")

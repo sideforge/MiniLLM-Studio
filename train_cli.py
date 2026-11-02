@@ -26,7 +26,9 @@ def main() -> None:
     ap.add_argument("--embd", type=int, default=128)
     ap.add_argument("--block", type=int, default=128)
     ap.add_argument("--steps", type=int, default=500)
-    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--batch", type=int, default=0, help="0 = automatisch (GPU: so gross wie möglich)")
+    ap.add_argument("--device", default="auto", help="auto | cpu | cuda | xpu | mps")
+    ap.add_argument("--no-amp", action="store_true", help="Mixed Precision ausschalten")
     ap.add_argument("--lr", type=float, default=3e-3)
     args = ap.parse_args()
 
@@ -40,9 +42,11 @@ def main() -> None:
     cfg = GPTConfig(vocab_size=meta["vocab_size"], block_size=args.block, n_layer=args.layers,
                     n_head=args.heads, n_embd=args.embd)
     tr = Trainer(args.name, prepared_path(args.name), cfg,
-                 TrainConfig(max_steps=args.steps, batch_size=args.batch, lr=args.lr,
+                 TrainConfig(max_steps=args.steps, batch_size=args.batch, lr=args.lr, device=args.device, amp=not args.no_amp,
                              eval_interval=max(10, args.steps // 10), sample_interval=max(50, args.steps // 4)))
     tr.start()
+    time.sleep(3)
+    print("Gerät:", tr.device_info.get("name", "?"), "| Batch:", tr.cfg.batch_size)
     while tr.is_running:
         time.sleep(2)
         if tr.metrics:

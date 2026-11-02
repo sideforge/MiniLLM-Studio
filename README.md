@@ -61,7 +61,8 @@ Die App führt mit sechs Seiten durch den ganzen Weg von den Rohdaten bis zum fe
 
 ## Schnellstart
 
-Voraussetzung: **Python 3.10+**. Eine Grafikkarte ist *nicht* nötig – alles läuft auf der CPU.
+Voraussetzung: **Python 3.10+**. Wenn eine **Grafikkarte (GPU)** da ist, wird sie automatisch benutzt und voll
+ausgelastet (siehe [GPU-Unterstützung](#gpu-unterstützung)). Ohne GPU läuft alles auf der CPU, nur langsamer.
 
 ```bash
 git clone https://github.com/sideforge/MiniLLM-Studio.git
@@ -81,6 +82,41 @@ Ohne App geht es auch über die Kommandozeile:
 ```bash
 python train_cli.py --datasets tinystories=5000 shakespeare=300 --steps 1500 --name test
 ```
+
+## GPU-Unterstützung
+
+Training **und** Text-Erzeugung laufen automatisch auf der schnellsten Grafikkarte, die PyTorch findet
+(Reihenfolge: NVIDIA/AMD → Intel → Apple → sonst CPU). Welches Gerät benutzt wird, steht in der Seitenleiste und im
+Training-Dashboard. Damit die GPU wirklich **voll ausgelastet** ist:
+
+| Massnahme | Wirkung |
+|---|---|
+| **Auto-Batch** (Standard) | Probiert immer grössere Batches, bis der Grafikspeicher voll ist, und nimmt das Maximum (minus Reserve) |
+| **Mixed Precision** (bf16/fp16) | Rechnet mit 16-Bit-Zahlen: halber Speicher, auf GPUs oft 2–3× schneller |
+| **TF32** und cuDNN-Autotuner | Schnellere Matrix-Multiplikation auf NVIDIA-Karten |
+| **Daten im GPU-Speicher** | Die Batches entstehen direkt auf der GPU, die Karte wartet nie auf die CPU |
+| **Fused AdamW** | Der ganze Optimierungs-Schritt ist ein einziger GPU-Kernel |
+| **Seltenes Synchronisieren** | Loss und Gradienten werden nur alle 10 Schritte von der GPU geholt, damit sie nie ins Leere läuft |
+
+**PyTorch mit GPU-Unterstützung installieren.** Das normale `pip install torch` liefert unter Windows oft die reine
+CPU-Version. Zeigt die App „CPU“, obwohl eine NVIDIA-Karte eingebaut ist, dann den passenden Befehl auf
+[pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/) auswählen (Pip + CUDA), z. B.:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+Prüfen, ob es klappt:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+Auf der Kommandozeile gibt es dafür `--device auto|cpu|cuda|xpu|mps`, `--batch 0` (= Auto) und `--no-amp`.
+
+> **Ehrlicher Hinweis:** Der GPU-Code ist nach den üblichen PyTorch-Mustern gebaut, und alle Tests laufen auf der CPU
+> durch. Ich konnte ihn aber nur auf einem Rechner **ohne** NVIDIA-Karte entwickeln, also nicht auf einer echten GPU
+> messen. Die Zahlen unter „Ergebnisse“ stammen deshalb von der CPU.
 
 ## 🎓 LLMs verstehen – Einstieg für Anfänger
 
@@ -352,6 +388,7 @@ MiniLLM-Studio/
 │   ├── data.py            #   Daten laden, Tokenizer trainieren, Batches
 │   ├── tokenizer.py       #   BPE-Tokenizer (selbst gebaut)
 │   ├── model.py           #   GPT-Transformer (selbst gebaut)
+│   ├── device.py          #   GPU/CPU-Wahl, Mixed Precision, Auto-Batch
 │   ├── trainer.py         #   Trainings-Schleife mit Live-Metriken
 │   └── generate.py        #   Sampling (Temperatur, Top-k, Top-p)
 ├── ui/                    # Seiten der App

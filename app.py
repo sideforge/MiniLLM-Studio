@@ -8,6 +8,7 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 import streamlit as st
 
 from ui import page_data, page_generate, page_model, page_runs, page_start, page_tokenizer, page_train
+from minillm import device as dev
 from ui.common import PAGES, fmt_time, prepared_names, setup_page, store
 
 st.set_page_config(page_title="MiniLLM Studio", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
@@ -38,6 +39,10 @@ with st.sidebar:
         st.selectbox("Aktiver Datensatz", names, key="active_data")
     else:
         st.caption("Noch kein Datensatz vorbereitet.")
+    di = dev.describe()
+    st.markdown(f"**{'🟢 GPU' if di['type'] != 'cpu' else '⚪ CPU'}:** {di['name']}")
+    if di["type"] == "cpu":
+        st.caption(di["hint"])
     t = store()["trainer"]
     if t is not None:
         st.divider()

@@ -9,6 +9,8 @@ Abschlussprojekt der Wiss · Autor: Joel Weber
 
 ---
 
+> 🎓 **Neu hier?** Springe zu [LLMs verstehen – Einstieg für Anfänger](#-llms-verstehen--einstieg-für-anfänger).
+
 ## Worum geht es?
 
 ChatGPT & Co. wirken wie Magie. In diesem Projekt habe ich gezeigt, dass dahinter erstaunlich wenig steckt – und alles
@@ -80,7 +82,206 @@ Ohne App geht es auch über die Kommandozeile:
 python train_cli.py --datasets tinystories=5000 shakespeare=300 --steps 1500 --name test
 ```
 
-## Wie funktioniert es?
+## 🎓 LLMs verstehen – Einstieg für Anfänger
+
+Du musst nichts über KI wissen, um hier mitzukommen. Lies die Abschnitte der Reihe nach und probiere dazwischen die
+passende Seite der App aus. Am Ende steht eine Liste mit **Mini-Experimenten**.
+
+### 1. Was ist ein LLM überhaupt?
+
+**LLM** heisst *Large Language Model* (grosses Sprachmodell). Stell dir die Wortvorschläge auf deinem Handy vor,
+nur viel, viel besser: Du tippst „Ich gehe heute Abend ins …“ und das Handy schlägt „Kino“ vor.
+
+> **Ein LLM macht nur eines: Es sagt voraus, welches Textstück als Nächstes kommt.**
+
+Dass ChatGPT „antwortet“, ist nur dieser Trick, tausendfach hintereinander: Es sagt das nächste Stück voraus, hängt es
+an, sagt das nächste voraus, und so weiter, bis ein ganzer Text entstanden ist.
+
+Das Modell **weiss nichts** im menschlichen Sinn. Es hat in riesigen Textmengen gelernt, welche Wörter häufig auf welche
+folgen, und daraus ein sehr gutes Gefühl für Sprache entwickelt.
+
+### 2. Der Weg eines Satzes durch das Modell
+
+```
+"Die Katze sitzt auf der"  →  [Tokens]  →  [Zahlenlisten]  →  [Attention + Schichten]  →  "Matte" (73 %)
+      1. zerlegen              2. Bedeutung        3. Zusammenhänge verstehen            4. vorhersagen
+```
+
+#### Schritt 1 – Text in Tokens zerlegen &nbsp;(Seite **🔤 Tokenizer**)
+
+Ein Computer kann nur mit Zahlen rechnen. Darum wird der Text in kleine Stücke zerlegt, die **Tokens**. Ein Token ist
+mal ein ganzes Wort („Katze“), mal ein Wortteil („sitz“ + „t“), mal nur ein Satzzeichen. Jedes Token hat eine Nummer.
+
+| Text | `Die` | `·Katze` | `·sitzt` | `·auf` | `·der` |
+|---|---|---|---|---|---|
+| Token-Nummer | 17 | 305 | 8 | 91 | 12 |
+
+(Das `·` steht für ein Leerzeichen; die Nummern sind hier nur ein Beispiel.)
+
+Warum nicht einfach jedes Wort? Es gibt unzählige Wörter (Namen, Tippfehler, zusammengesetzte deutsche Wörter wie
+„Donaudampfschifffahrtsgesellschaft“). Mit **Wortteilen** kommt man mit einem Vokabular von einigen Tausend bis
+Zehntausend Einträgen aus und kann trotzdem jedes Wort bilden. Mein Tokenizer lernt diese Teile selbst: Er sucht immer
+das häufigste Buchstabenpaar und macht daraus ein neues Token (*Byte-Pair-Encoding*).
+
+#### Schritt 2 – Jedes Token bekommt eine „Bedeutung“ &nbsp;(Ansicht **🗺 Embeddings** im Training)
+
+Die Nummer 305 sagt dem Modell noch nichts. Deshalb bekommt jedes Token eine **Liste aus Zahlen** (bei meinem Modell
+128 Zahlen), den *Embedding*-Vektor. Stell dir das als **Koordinaten auf einer riesigen Landkarte** vor:
+
+- Tokens, die ähnlich benutzt werden („Hund“, „Katze“), liegen **nah beieinander**.
+- Tokens, die nichts miteinander zu tun haben („Katze“, „und“), liegen **weit auseinander**.
+
+Am Anfang des Trainings ist diese Landkarte **Zufall**. Das Modell lernt sie erst – du kannst in der App zuschauen,
+wie sich die Punkte im Training sortieren.
+
+#### Schritt 3 – Attention: „Worauf muss ich achten?“ &nbsp;(Ansicht **👁 Aufmerksamkeit**)
+
+Das ist die Erfindung, die Modelle wie ChatGPT möglich gemacht hat. Lies diesen Satz:
+
+> „Die Katze jagt die Maus, weil **sie** Hunger hat.“
+
+Wer hat Hunger? Um „sie“ richtig zu verstehen, musst du **zurückschauen** auf „Katze“ und „Maus“. Genau das macht die
+*Attention*: Jedes Token **schaut auf alle Tokens davor** und entscheidet, **wie wichtig** jedes davon für das
+Verständnis ist. Das Ergebnis ist die Heatmap in der App – hell = „da schaue ich stark hin“.
+
+Ein Vergleich: Jedes Token stellt in einer Bibliothek eine **Frage** („Wer ist das Subjekt?“). Alle anderen Tokens
+haben ein **Etikett**, das beschreibt, was sie anbieten. Passt die Frage zum Etikett, wird der **Inhalt** dieses Tokens
+stark übernommen. (Fachwörter: *Query*, *Key*, *Value*.)
+
+Zwei Dinge sind wichtig:
+
+- **Mehrere Köpfe:** Das Modell macht das mehrfach parallel (*Attention Heads*). Ein Kopf achtet vielleicht auf das
+  vorige Wort, ein anderer auf das Satzende. Auswählen kannst du das in der App mit „Schicht“ und „Kopf“.
+- **Nur zurückschauen:** Beim Vorhersagen darf ein Token die **Zukunft nicht sehen** (sonst wäre es geschummelt).
+  Darum ist die obere rechte Hälfte der Heatmap immer leer (*Causal Mask*).
+
+#### Schritt 4 – Schichten stapeln &nbsp;(Seite **🧠 Modell**)
+
+Eine Runde Attention reicht nicht. Das Modell ist ein **Stapel aus mehreren gleichen Bausteinen** („Blöcken“), und jeder
+Block besteht aus Attention und einem kleinen Netz zum „Nachdenken“ (*MLP*). Mit jeder Schicht entstehen abstraktere
+Zusammenhänge: erst Buchstabenmuster, dann Wörter, dann Satzbau, dann Inhalte. Mein Modell hat 4 Schichten, GPT-3 hat 96.
+
+#### Schritt 5 – Vorhersagen und Würfeln &nbsp;(Seite **✨ Generieren**)
+
+Am Ende gibt das Modell für **jedes** Token im Vokabular eine Wahrscheinlichkeit aus (Beispielzahlen):
+
+| Nächstes Token | Wahrscheinlichkeit |
+|---|---|
+| `·Matte` | 73 % |
+| `·Couch` | 11 % |
+| `·Wiese` | 4 % |
+| … 1020 weitere | zusammen 12 % |
+
+Dann wird **gewürfelt**, gewichtet nach diesen Chancen. Deshalb schreibt dasselbe Modell bei jedem Versuch etwas
+Anderes. Zwei Regler steuern das Würfeln:
+
+- **Temperatur:** Niedrig (0.2) = vorsichtig, nimmt fast immer das wahrscheinlichste Token, wird aber schnell
+  langweilig und wiederholt sich. Hoch (1.5) = mutig und kreativ, aber irgendwann unsinnig.
+- **Top-k / Top-p:** Schneiden die unwahrscheinlichsten Tokens ab, damit keine Ausreisser dabei sind.
+
+### 3. Wie lernt das Modell? &nbsp;(Seite **🏋️ Training**)
+
+Das Modell besteht aus Millionen **Reglern** (den *Parametern*, bei meinem Modell 940'800). Am Anfang stehen sie alle auf
+Zufall, und das Modell rät wild. Das Lernen läuft immer gleich ab:
+
+1. **Ein Textstück zeigen** und das nächste Token abdecken.
+2. Das Modell **rät** (gibt Wahrscheinlichkeiten aus).
+3. Der **Loss** misst, wie schlecht das war: Hat es dem richtigen Token 50 % gegeben, ist der Loss klein (0.69). Hat
+   es nur 1 % gegeben, ist er gross (4.6). Reines Raten bei 1024 Tokens ergibt ln(1024) = **6.93**. Das ist die
+   gestrichelte Linie im Loss-Diagramm.
+4. **Backpropagation** rechnet aus, **welcher Regler wie stark schuld** am Fehler war.
+5. Jeder Regler wird **ein winziges Stück** in die bessere Richtung gedreht (Optimierer *AdamW*).
+6. Das Ganze **tausendfach wiederholen** mit immer neuen Textstücken.
+
+Ein Vergleich dafür: Du stehst **im dichten Nebel auf einem Berg** und willst ins Tal. Du siehst nur den Boden direkt
+unter deinen Füssen und gehst immer ein Stück in die Richtung, in der es am steilsten bergab geht. Das Tal ist der
+kleinste Loss. Die **Lernrate** ist die Schrittlänge: zu gross, und du stolperst über das Tal hinweg, zu klein, und du
+kommst nie an. Darum zeigt die App die Lernrate als Kurve (zuerst langsam steigend, dann sanft fallend).
+
+**Woran erkenne ich, dass es klappt?**
+
+- Der **Loss sinkt** von 6.9 Richtung 3 oder tiefer. Das ist gut.
+- Die **Beispieltexte** werden von Buchstabensalat über echte Wörter zu Sätzen.
+- Die **Perplexity** (`e^Loss`) sinkt. Sie sagt, zwischen wie vielen Tokens das Modell im Schnitt noch schwankt.
+
+**Wozu die Validierungs-Daten?** Ein Teil der Texte wird **versteckt** und nie zum Lernen benutzt. Auf ihnen prüft die App
+regelmässig die Leistung (orange Linie). Das ist wie eine Prüfung mit neuen Aufgaben statt den Übungsaufgaben. Lernt
+das Modell nur die Übungstexte **auswendig** (*Overfitting*), sinkt der Trainings-Loss weiter, der Validierungs-Loss
+steigt wieder. Das Diagramm „Lücke Val − Train“ zeigt das.
+
+### 4. Vom Sprachmodell zum Chatbot
+
+Mein Modell ist ein **Basismodell**: Es setzt Texte fort, mehr nicht. ChatGPT entsteht in drei Stufen:
+
+| Stufe | Was passiert | Beispiel in diesem Projekt |
+|---|---|---|
+| **1. Pretraining** | Riesige Textmengen lesen, nächstes Token vorhersagen | alle Textdatensätze (TinyStories, Wikipedia, …) |
+| **2. Anweisungs-Training** | Mit Frage-Antwort-Paaren nachtrainieren | Datensätze *Alpaca*, *Dolly*, *OpenAssistant* (haben das Format „### Frage / ### Antwort“) |
+| **3. Feedback von Menschen** | Menschen bewerten Antworten, das Modell lernt die besseren | nicht enthalten |
+
+Mit den Datensätzen aus Stufe 2 kannst du in der App selbst ausprobieren, wie ein Modell das Frage-Antwort-Muster lernt.
+Wirklich nützliche Antworten brauchen aber ein viel grösseres Modell.
+
+### 5. Wie gross ist „gross“?
+
+| | Parameter | Trainingsdaten | Trainiert auf |
+|---|---|---|---|
+| **MiniLLM (dieses Projekt)** | ca. 1 Million | ca. 3 Mio. Tokens | Laptop-CPU, 10 Minuten |
+| GPT-2 (2019) | 124 Mio. bis 1.5 Mrd. | ca. 10 Mrd. Tokens | Rechen-Cluster |
+| GPT-3 (2020) | 175 Mrd. | ca. 300 Mrd. Tokens | tausende Grafikkarten, Wochen |
+
+Dieselbe Architektur, nur etwa **175'000-mal kleiner**. Deshalb lernt mein Modell Satzbau und kleine Geschichten, aber
+keine Fakten über die Welt. Je grösser Modell **und** Datenmenge, desto mehr „Fähigkeiten“ entstehen.
+
+### 6. Mini-Experimente zum Selbermachen
+
+Jedes dauert nur wenige Minuten. Schreib auf, was du beobachtest. Das eignet sich gut für eine Präsentation.
+
+| # | Experiment | Wo | Was du siehst |
+|---|---|---|---|
+| 1 | **Vokabular-Grösse:** Daten mit 300 und mit 4096 Tokens vorbereiten | 📚 Daten, 🔤 Tokenizer | Bei grossem Vokabular werden die Texte kürzer (mehr Zeichen pro Token) |
+| 2 | **Tokenizer testen:** einen deutschen, einen englischen Satz und Code eingeben | 🔤 Tokenizer | Fremde Sprachen und Code zerfallen in viel mehr Stücke |
+| 3 | **Temperatur:** denselben Prompt mit 0.2, 0.8 und 1.6 erzeugen | ✨ Generieren | Von „langweilig & repetitiv“ bis „kreativ & chaotisch“ |
+| 4 | **Modell-Grösse:** „Winzig“ und „Mittel“ je 1500 Schritte trainieren | 🧠 Modell, 🏋️ Training | Das grössere Modell erreicht meist einen tieferen Loss, braucht aber länger |
+| 5 | **Lernrate kaputt machen:** auf 0.01 stellen | 🏋️ Training | Der Loss zappelt oder explodiert, die Gradienten-Kurve schlägt aus |
+| 6 | **Overfitting erzeugen:** nur 50 Dokumente, aber ein „Mittel“-Modell und viele Schritte | 📚 Daten, 🏋️ Training | Der Trainings-Loss sinkt, der Validierungs-Loss steigt wieder |
+| 7 | **Attention vorher/nachher:** Heatmap bei Schritt 0 und am Ende vergleichen | 🏋️ Training → 👁 | Erst gleichmässiges Grau, später Muster (z. B. Blick aufs vorige Wort) |
+| 8 | **Andere Daten:** dasselbe Modell mit „💻 Code“ und mit „🇩🇪 Deutsch“ trainieren | 📚 Daten | Es lernt die Eigenheiten der Daten: Einrückungen und Klammern bzw. deutsche Wörter |
+| 9 | **Wie sicher ist das Modell?** Einen Text erzeugen und das Diagramm ansehen | ✨ Generieren | An Satzanfängen und bei Namen ist es unsicher, mitten im Wort sehr sicher |
+
+### 7. Glossar
+
+| Begriff | Einfach erklärt |
+|---|---|
+| **Token** | Ein Textstück (Wort, Wortteil, Satzzeichen), das als Zahl dargestellt wird |
+| **Vokabular** | Die Liste aller Tokens, die das Modell kennt |
+| **Embedding** | Die Zahlenliste („Koordinaten auf der Landkarte“) eines Tokens |
+| **Attention** | Mechanismus, mit dem jedes Token entscheidet, auf welche früheren Tokens es achtet |
+| **Schicht / Block** | Ein Baustein des Modells; mehrere werden gestapelt |
+| **Parameter** | Ein einstellbarer Regler im Modell; gelernt wird, indem sie verstellt werden |
+| **Loss** | Fehlermass: je kleiner, desto besser rät das Modell |
+| **Perplexity** | `e^Loss`: zwischen so vielen Tokens schwankt das Modell im Schnitt |
+| **Gradient** | Die Richtung, in die ein Regler gedreht werden muss, um den Fehler zu verkleinern |
+| **Backpropagation** | Verfahren, das für alle Regler ihren Anteil am Fehler ausrechnet |
+| **Lernrate** | Wie gross die Schritte beim Verbessern sind |
+| **Batch** | Mehrere Textstücke, die gleichzeitig verarbeitet werden |
+| **Overfitting** | Das Modell lernt die Übungstexte auswendig statt die Sprache |
+| **Temperatur** | Regler für die Zufälligkeit beim Würfeln des nächsten Tokens |
+| **Kontextlänge** | Wie viele Tokens das Modell gleichzeitig „im Blick“ hat |
+| **Pretraining / Fine-Tuning** | Erst allgemein lernen, dann auf eine Aufgabe nachtrainieren |
+
+### 8. Zum Weiterlernen
+
+- **Andrej Karpathy – „Let's build GPT: from scratch, in code, spelled out“** (Video, YouTube). Baut dasselbe wie dieses
+  Projekt, Zeile für Zeile.
+- **3Blue1Brown – Serie „Neural Networks“** (YouTube). Sehr anschauliche Animationen zu neuronalen Netzen,
+  Backpropagation und Transformern.
+- **Jay Alammar – „The Illustrated Transformer“** (Blog). Der Klassiker zum Thema Attention mit vielen Bildern.
+- **Original-Paper:** *Attention Is All You Need* (2017), der Ursprung aller heutigen LLMs.
+- **Dieser Code:** [`minillm/model.py`](minillm/model.py) ist nur 172 Zeilen lang und kommentiert. Das
+  ganze „Geheimnis“ steckt in diesen Zeilen.
+
+## Technische Details (für Fortgeschrittene)
 
 ```mermaid
 flowchart LR

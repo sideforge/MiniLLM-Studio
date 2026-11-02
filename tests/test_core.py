@@ -274,3 +274,70 @@ def test_saved_custom_datasets_load_in_both_import_orders(tmp_path):
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
                              cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         assert out.stdout.strip() == "True", (first, out.stdout, out.stderr[-300:])
+
+
+# ------------------------------------------- Datensätze mit wechselndem Schema (CastError)
+def test_render_value_message_blocks():
+    from minillm.catalog import render_value
+    msg = {"role": "assistant", "content": [{"type": "text", "text": "Hallo!"},
+                                            {"type": "tool_use", "name": "Bash", "input": {"cmd": "ls"}}]}
+    out = render_value(msg)
+    assert out.startswith("### Antwort:\nHallo!") and "[Werkzeug: Bash]" in out
+    assert render_value({"role": "user", "content": "Frage?"}) == "### Frage:\nFrage?"
+    assert render_value([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "a\nb"
+
+
+def test_detect_columns_finds_message_dict():
+    from minillm.custom import detect_columns
+    row = {"parentUuid": None, "cwd": "/x", "sessionId": "abc", "type": "user",
+           "message": {"role": "user", "content": "hello"}}
+    assert detect_columns(row) == ["message"]
+
+
+def _fake_info(key="t_schema"):
+    from minillm.catalog import DatasetInfo
+    return DatasetInfo(key, "t", "a/b", "", "Eigene", "en", lambda r: r["text"], min_chars=1)
+
+
+def test_iter_texts_falls_back_to_raw_json_on_schema_error(monkeypatch):
+    from minillm import catalog
+
+    def fake_rows(info, raw):
+        if raw:
+            yield from ({"text": f"raw{i}"} for i in range(5))
+        else:
+            raise ValueError("CastError: Couldn't cast parentUuid: string ...")
+            yield   # pragma: no cover
+    monkeypatch.setattr(catalog, "_rows", fake_rows)
+    assert list(catalog.iter_texts(_fake_info(), 3)) == ["raw0", "raw1", "raw2"]
+
+
+def test_fetch_restarts_cleanly_when_schema_changes_midway(monkeypatch, tmp_path):
+    from minillm import catalog
+    info = _fake_info()
+    monkeypatch.setitem(catalog.BY_KEY, info.key, info)
+    monkeypatch.setattr(catalog, "RAW_DIR", tmp_path)
+
+    def fake_rows(info_, raw):
+        if raw:
+            yield from ({"text": f"raw{i}"} for i in range(10))
+        else:
+            yield {"text": "normal0"}
+            yield {"text": "normal1"}
+            raise ValueError("CastError: Couldn't cast column 3")
+    monkeypatch.setattr(catalog, "_rows", fake_rows)
+    path = catalog.fetch_dataset(info.key, 4)
+    docs = catalog.read_documents(path)
+    assert docs == ["raw0", "raw1", "raw2", "raw3"]      # keine Reste vom abgebrochenen Versuch
+
+
+def test_other_errors_are_not_swallowed(monkeypatch):
+    import pytest
+    from minillm import catalog
+
+    def boom(info, raw):
+        raise ConnectionError("Netzwerk weg")
+        yield   # pragma: no cover
+    monkeypatch.setattr(catalog, "_rows", boom)
+    with pytest.raises(ConnectionError):
+        list(catalog.iter_texts(_fake_info(), 3))

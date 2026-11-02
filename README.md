@@ -98,6 +98,9 @@ python train_cli.py --datasets tinystories=5000 shakespeare=300 --steps 1500 --n
 
 Gesperrte Datensätze (🔒) brauchen eine Anmeldung (`huggingface-cli login` oder die Umgebungsvariable `HF_TOKEN`).
 Alte Datensätze mit Lade-Skript funktionieren nicht mehr, dann meldet die App das verständlich.
+Haben die Zeilen einer JSON-Datei **unterschiedliche Strukturen** (z. B. Protokolle von Chat- oder Agenten-Sitzungen),
+scheitert die `datasets`-Bibliothek mit einem `CastError`. Die App erkennt das und liest die Dateien dann direkt als JSON.
+Nachrichten mit `role` und `content` (auch mit Text-, Werkzeug- und Ergebnis-Blöcken) werden zu „### Frage / ### Antwort“.
 
 **Stärker und schwerer:**
 

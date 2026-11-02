@@ -5,7 +5,7 @@ import json
 import re
 from typing import Callable
 
-from .catalog import BY_KEY, CATALOG, DATA_DIR, DatasetInfo, render_value
+from .catalog import BY_KEY, CATALOG, DATA_DIR, DatasetInfo, is_schema_error, raw_rows, render_value
 
 CUSTOM_FILE = DATA_DIR / "custom_datasets.json"
 
@@ -24,6 +24,9 @@ def detect_columns(row: dict) -> list[str]:
     for name in _CHAT:
         if name in low and isinstance(row[low[name]], list):
             return [low[name]]
+    for col, val in row.items():                      # einzelne Chat-Nachricht {"role": ..., "content": ...}
+        if isinstance(val, dict) and "content" in val and ("role" in val or "from" in val):
+            return [col]
     for name in _PREFERRED:
         if name in low and isinstance(row[low[name]], str) and row[low[name]].strip():
             return [low[name]]
@@ -92,12 +95,21 @@ def list_splits(repo: str, config: str | None) -> list[str]:
 def inspect_dataset(repo: str, config: str | None = None, split: str = "train", n: int = 3) -> dict:
     """Streamt die ersten ``n`` Zeilen. Gibt Spalten, Beispielwerte und die empfohlene Spaltenwahl zurück."""
     from datasets import load_dataset
-    ds = load_dataset(repo, config, split=split, streaming=True)
-    rows = []
-    for row in ds:
-        rows.append(row)
-        if len(rows) >= n:
-            break
+    rows: list[dict] = []
+    try:
+        ds = load_dataset(repo, config, split=split, streaming=True)
+        for row in ds:
+            rows.append(row)
+            if len(rows) >= n:
+                break
+    except Exception as e:
+        if not is_schema_error(e):
+            raise
+        rows = []                                    # Zeilen mit verschiedenen Strukturen: Rückfall auf rohes JSON
+        for row in raw_rows(repo, split):
+            rows.append(row)
+            if len(rows) >= n:
+                break
     if not rows:
         raise ValueError("Der Datensatz ist leer.")
     first = rows[0]

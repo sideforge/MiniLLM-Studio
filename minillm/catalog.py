@@ -30,8 +30,35 @@ def _instruct(instruction: str, context: str, answer: str) -> str:
 
 
 
+def _role_label(role: str) -> str:
+    if role in ("user", "human", "prompter"):
+        return "### Frage:"
+    if role in ("assistant", "gpt", "bot", "model"):
+        return "### Antwort:"
+    return f"### {role}:" if role else ""
+
+
+def _is_block_list(v: list) -> bool:
+    """Liste von Inhalts-Blöcken wie [{"type": "text", "text": "..."}, {"type": "tool_use", ...}] (Claude/OpenAI-Format)."""
+    return bool(v) and all(isinstance(m, dict) and "type" in m and "role" not in m and "from" not in m for m in v)
+
+
+def _render_block(m: dict) -> str:
+    t = m.get("type")
+    if t == "text" or ("text" in m and t is None):
+        return str(m.get("text", ""))
+    if t == "tool_use":
+        return f"[Werkzeug: {m.get('name', '?')}] " + json.dumps(m.get("input", {}), ensure_ascii=False)
+    if t == "tool_result":
+        return "[Ergebnis] " + render_value(m.get("content"))
+    if t == "thinking":
+        return str(m.get("thinking", ""))
+    return render_value(m.get("text") or m.get("content") or "")
+
+
 def render_value(v) -> str:
-    """Macht aus beliebigen Zellen Text: Strings bleiben, Chat-Listen werden zu Frage/Antwort, Listen werden verbunden."""
+    """Macht aus beliebigen Zellen Text: Strings bleiben, Chat-Listen und Nachrichten werden zu Frage/Antwort,
+    Inhalts-Blöcke werden zu Text, andere Listen werden verbunden."""
     if v is None:
         return ""
     if isinstance(v, str):
@@ -39,23 +66,22 @@ def render_value(v) -> str:
     if isinstance(v, (int, float, bool)):
         return str(v)
     if isinstance(v, list):
+        if _is_block_list(v):
+            return "\n".join(x for x in (_render_block(m).strip() for m in v) if x)
         if v and all(isinstance(m, dict) for m in v):
             parts = []
             for m in v:
                 role = str(m.get("role") or m.get("from") or "")
                 content = m["content"] if "content" in m else m.get("value", m.get("text"))
-                if content is None:
-                    content = json.dumps(m, ensure_ascii=False)
-                if role in ("user", "human", "prompter"):
-                    label = "### Frage:"
-                elif role in ("assistant", "gpt", "bot", "model"):
-                    label = "### Antwort:"
-                else:
-                    label = f"### {role}:" if role else ""
-                parts.append((label + "\n" if label else "") + str(content).strip())
+                content = json.dumps(m, ensure_ascii=False) if content is None else render_value(content)
+                label = _role_label(role)
+                parts.append((label + "\n" if label else "") + content.strip())
             return "\n".join(parts)
         return "\n".join(render_value(x) for x in v)
     if isinstance(v, dict):
+        if "content" in v and ("role" in v or "from" in v):          # einzelne Chat-Nachricht
+            label = _role_label(str(v.get("role") or v.get("from") or ""))
+            return (label + "\n" if label else "") + render_value(v["content"]).strip()
         return "\n".join(f"{k}: {render_value(x)}" for k, x in v.items())
     return str(v)
 
@@ -342,27 +368,91 @@ BY_KEY: dict[str, DatasetInfo] = {d.key: d for d in CATALOG}
 CATEGORIES = sorted({d.category for d in CATALOG})
 
 
-def iter_texts(info: DatasetInfo, max_docs: int) -> Iterator[str]:
-    """Liefert bis zu ``max_docs`` Texte aus dem Datensatz (per Streaming, ohne alles herunterzuladen)."""
-    from datasets import load_dataset
+class SchemaChanged(Exception):
+    """Das Schema der Datei wechselt mitten im Datensatz – der Aufrufer muss mit dem rohen Leser neu beginnen."""
 
-    ds = load_dataset(info.hf_path, info.config, split=info.split, streaming=True)
+
+def is_schema_error(e: Exception) -> bool:
+    text = f"{type(e).__name__} {e}".lower()
+    return any(k in text for k in ("couldn't cast", "casterror", "datasetgenerationerror", "arrowinvalid",
+                                   "failed to parse", "schema", "column names don't match", "expected object"))
+
+
+def raw_rows(repo: str, split: str | None = None) -> Iterator[dict]:
+    """Liest JSON/JSONL-Dateien direkt (ohne festes Schema). Rückfall für Datensätze, deren Zeilen verschiedene
+    Strukturen haben und an der ``datasets``-Bibliothek mit einem CastError scheitern."""
+    import gzip
+    import io
+    from huggingface_hub import HfApi, HfFileSystem
+
+    files = [f for f in HfApi().list_repo_files(repo, repo_type="dataset")
+             if f.lower().endswith((".jsonl", ".json", ".jsonl.gz", ".json.gz"))]
+    if split:
+        files = [f for f in files if split.lower() in f.lower()] or files
+    if not files:
+        raise ValueError("Keine JSON-Dateien im Datensatz gefunden.")
+    fs = HfFileSystem()
+    for f in sorted(files):
+        with fs.open(f"datasets/{repo}/{f}", "rb") as raw:
+            fh = gzip.open(raw) if f.lower().endswith(".gz") else raw
+            if ".jsonl" in f.lower():
+                for line in io.TextIOWrapper(fh, encoding="utf-8", errors="replace"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(row, dict):
+                        yield row
+            else:
+                data = json.load(io.TextIOWrapper(fh, encoding="utf-8", errors="replace"))
+                rows = data if isinstance(data, list) else next((v for v in data.values() if isinstance(v, list)), [])
+                for row in rows:
+                    if isinstance(row, dict):
+                        yield row
+
+
+def _rows(info: DatasetInfo, raw: bool) -> Iterator[dict]:
+    if raw:
+        yield from raw_rows(info.hf_path, info.split)
+        return
+    from datasets import load_dataset
+    yield from load_dataset(info.hf_path, info.config, split=info.split, streaming=True)
+
+
+def iter_texts(info: DatasetInfo, max_docs: int, raw: bool | None = None) -> Iterator[str]:
+    """Liefert bis zu ``max_docs`` Texte aus dem Datensatz (per Streaming, ohne alles herunterzuladen).
+
+    Scheitert das normale Laden am Schema (verschiedene Strukturen in einer Datei), wird automatisch auf den rohen
+    JSON-Leser umgeschaltet. Passiert das erst nach einigen Dokumenten, wird ``SchemaChanged`` ausgelöst."""
     n = 0
-    for row in ds:
-        try:
-            text = info.fmt(row)
-        except Exception:
-            continue
-        text = text.strip()
-        if len(text) < info.min_chars:
-            continue
-        if info.max_chars and len(text) > info.max_chars:
-            cut = text[:info.max_chars]
-            text = cut[:cut.rfind("\n")] if "\n" in cut[info.max_chars // 2:] else cut
-        yield text
-        n += 1
-        if n >= max_docs:
-            return
+    try:
+        for row in _rows(info, bool(raw)):
+            try:
+                text = info.fmt(row)
+            except Exception:
+                continue
+            text = text.strip()
+            if len(text) < info.min_chars:
+                continue
+            if info.max_chars and len(text) > info.max_chars:
+                cut = text[:info.max_chars]
+                text = cut[:cut.rfind("\n")] if "\n" in cut[info.max_chars // 2:] else cut
+            yield text
+            n += 1
+            if n >= max_docs:
+                return
+    except SchemaChanged:
+        raise
+    except Exception as e:
+        if raw is None and is_schema_error(e):
+            if n == 0:
+                yield from iter_texts(info, max_docs, raw=True)
+                return
+            raise SchemaChanged(str(e)) from e
+        raise
 
 
 def raw_path(key: str, max_docs: int) -> Path:
@@ -381,11 +471,17 @@ def fetch_dataset(key: str, max_docs: int, progress: Callable[[int, int], None] 
         return path
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".part")
-    with open(tmp, "w", encoding="utf-8") as f:
-        for i, text in enumerate(iter_texts(info, max_docs), 1):
-            f.write(re.sub(re.escape(EOT), "", text) + "\n" + EOT + "\n")
-            if progress and (i % 50 == 0 or i == max_docs):
-                progress(i, max_docs)
+    def write_all(raw: bool | None) -> None:
+        with open(tmp, "w", encoding="utf-8") as f:
+            for i, text in enumerate(iter_texts(info, max_docs, raw), 1):
+                f.write(re.sub(re.escape(EOT), "", text) + "\n" + EOT + "\n")
+                if progress and (i % 50 == 0 or i == max_docs):
+                    progress(i, max_docs)
+
+    try:
+        write_all(None)
+    except SchemaChanged:            # Schema wechselt mittendrin: sauber von vorn mit dem rohen JSON-Leser
+        write_all(True)
     tmp.replace(path)
     return path
 

@@ -22,7 +22,7 @@ selbst gebaut, **ohne fertige Modelle oder Tokenizer-Bibliotheken**:
 | **GPT-Transformer** | [`minillm/model.py`](minillm/model.py) | Embeddings, Causal Self-Attention, MLP, LayerNorm, Residuals |
 | **Trainings-Schleife** | [`minillm/trainer.py`](minillm/trainer.py) | AdamW, Warmup + Kosinus-Lernrate, Gradient Clipping, Validierung |
 | **Text-Erzeugung** | [`minillm/generate.py`](minillm/generate.py) | Temperatur, Top-k, Top-p (Nucleus-Sampling) |
-| **Daten-Pipeline** | [`minillm/catalog.py`](minillm/catalog.py), [`data.py`](minillm/data.py) | 34 Hugging-Face-Datensätze per Streaming laden und mischen |
+| **Daten-Pipeline** | [`minillm/catalog.py`](minillm/catalog.py), [`data.py`](minillm/data.py) | 41 Hugging-Face-Datensätze per Streaming laden und mischen |
 | **App** | [`app.py`](app.py), [`ui/`](ui) | Streamlit-Oberfläche mit vielen interaktiven Diagrammen |
 
 Verwendet wird nur **PyTorch** (für Tensoren und automatische Ableitung), **`datasets`** (zum Laden der Daten),
@@ -32,7 +32,7 @@ Verwendet wird nur **PyTorch** (für Tensoren und automatische Ableitung), **`da
 
 Die App führt mit sechs Seiten durch den ganzen Weg von den Rohdaten bis zum fertigen Modell:
 
-1. **📚 Daten** – 34 Datensätze von Hugging Face zur Auswahl (Geschichten, Wikipedia, Web, Nachrichten, **Code**, Chat,
+1. **📚 Daten** – 41 Datensätze von Hugging Face zur Auswahl (Geschichten, Wikipedia, Web, Nachrichten, **Code**, Chat,
    Deutsch …), mit Filter, Vorschau und fertigen Mischungen (z. B. „Code“, „Deutsch“, „Text + Code“).
    → [Alle Datensätze](docs/DATASETS.md)
 2. **🔤 Tokenizer** – eigenes Vokabular trainieren, Text in farbige Tokens zerlegen, Zipf-Verteilung ansehen.
@@ -82,6 +82,34 @@ Ohne App geht es auch über die Kommandozeile:
 ```bash
 python train_cli.py --datasets tinystories=5000 shakespeare=300 --steps 1500 --name test
 ```
+
+## Eigene Datensätze und starke Modelle
+
+**Jeder öffentliche Datensatz von Hugging Face geht.** Auf der Seite **📚 Daten** gibt es den Bereich
+**„➕ Eigenen Hugging-Face-Datensatz hinzufügen“**:
+
+1. **Im Hub suchen** (z. B. „python code“, „german news“, „math“) und einen Treffer anklicken, oder den Namen direkt
+   eintippen (`besitzer/name`).
+2. Die App **prüft den Datensatz** (nur die ersten Zeilen werden gestreamt), zeigt Konfigurationen, Splits und
+   Spalten und **rät, welche Spalte der Text ist**. Chat-Daten (`messages`, `conversations`) werden automatisch zu
+   „### Frage / ### Antwort“.
+3. Spalten wählen, **Vorschau** ansehen, **„Zum Katalog hinzufügen“**. Der Datensatz bleibt gespeichert und verhält sich
+   wie alle anderen: auswählen, Dokumentenzahl einstellen, mischen, trainieren.
+
+Gesperrte Datensätze (🔒) brauchen eine Anmeldung (`huggingface-cli login` oder die Umgebungsvariable `HF_TOKEN`).
+Alte Datensätze mit Lade-Skript funktionieren nicht mehr, dann meldet die App das verständlich.
+
+**Stärker und schwerer:**
+
+| Was | Wie |
+|---|---|
+| **Anspruchsvolle Datensätze** | FineMath, OpenR1-Math, OpenMathInstruct-2, CodeFeedback, SmolTalk, Tulu-3, SlimOrca (Schwierigkeit „sehr schwer“, Filter in der App) |
+| **Viel mehr Daten** | bis zu 2 Mio. Dokumente pro Datensatz (ab ca. 200 000 braucht die Vorbereitung viel RAM und Zeit) |
+| **Grosse Vokabulare** | bis 32 768 Tokens; der Tokenizer ist dafür mit einem Heap beschleunigt (liefert exakt dieselben Ergebnisse wie die langsame Variante, per Test geprüft) |
+| **Grosse Modelle** | Vorlagen „Riesig“ (ca. 90 Mio. Parameter) und „Extrem“ (ca. 210 Mio.), bis 24 Schichten und Breite 1024 |
+| **Lange Trainings** | bis 200 000 Schritte |
+
+Die grossen Modelle sind für eine **GPU** gedacht. Auf der CPU sind sie viel zu langsam, die App warnt dann.
 
 ## GPU-Unterstützung
 
@@ -396,7 +424,7 @@ MiniLLM-Studio/
 ├── app.py                 # Streamlit-App (Einstieg)
 ├── train_cli.py           # Training ohne App
 ├── minillm/               # der eigentliche Kern
-│   ├── catalog.py         #   Katalog der 34 Hugging-Face-Datensätze
+│   ├── catalog.py         #   Katalog der 41 Hugging-Face-Datensätze
 │   ├── data.py            #   Daten laden, Tokenizer trainieren, Batches
 │   ├── tokenizer.py       #   BPE-Tokenizer (selbst gebaut)
 │   ├── model.py           #   GPT-Transformer (selbst gebaut)

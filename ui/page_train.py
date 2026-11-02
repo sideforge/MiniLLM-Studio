@@ -73,7 +73,7 @@ def render() -> None:
     with st.expander("⚙️ Trainings-Einstellungen", expanded=not running and (trainer is None)):
         a, b, c = st.columns(3)
         a.text_input("Name des Laufs", key="t_name", disabled=running)
-        b.slider("Trainingsschritte", 100, 20000, step=100, key="t_steps", disabled=running,
+        b.slider("Trainingsschritte", 100, 200000, step=100, key="t_steps", disabled=running,
                  help="Ein Schritt = ein Batch wird verarbeitet und die Gewichte werden einmal angepasst.")
         c.select_slider("Batch-Grösse", ["Auto", 4, 8, 16, 32, 64, 128, 256, 512], key="t_batch", disabled=running,
                         help="Wie viele Textfenster pro Schritt gleichzeitig gelernt werden. „Auto“ nimmt auf der GPU "

@@ -6,6 +6,7 @@ hat das Vokabular 256 + n Einträge. Häufige Wörter werden so zu einem einzige
 """
 from __future__ import annotations
 
+import heapq
 import json
 import re
 from collections import Counter, defaultdict
@@ -57,15 +58,26 @@ class BPETokenizer:
 
         merges: list[tuple[int, int]] = []
         vocab = [bytes([i]) for i in range(256)]
+        # Das häufigste Paar kommt aus einem Heap (statt jedes Mal alle Paare zu durchsuchen): so bleibt auch ein
+        # Vokabular von 32'000 Tokens schnell. Veraltete Heap-Einträge werden beim Herausnehmen aussortiert.
+        heap = [(-c, a, b) for (a, b), c in pair_counts.items()]
+        heapq.heapify(heap)
         for m in range(n_merges):
-            if not pair_counts:
-                break
-            best = max(pair_counts.items(), key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))[0]
-            if pair_counts[best] < 2:
+            best = None
+            while heap:
+                neg, a, b = heapq.heappop(heap)
+                cur = pair_counts.get((a, b), 0)
+                if cur == -neg:
+                    best = (a, b)
+                    break
+                if cur > 0:
+                    heapq.heappush(heap, (-cur, a, b))
+            if best is None or pair_counts[best] < 2:
                 break
             new_id = 256 + m
             merges.append(best)
             vocab.append(vocab[best[0]] + vocab[best[1]])
+            touched: set[tuple[int, int]] = set()
             for wi in list(pair_words[best]):
                 w, f = words[wi], freqs[wi]
                 for p in zip(w, w[1:]):                      # alte Paare dieses Wortes entfernen
@@ -85,8 +97,13 @@ class BPETokenizer:
                 for p in zip(new_w, new_w[1:]):              # neue Paare eintragen
                     pair_counts[p] += f
                     pair_words[p].add(wi)
+                    touched.add(p)
             pair_words.pop(best, None)
             pair_counts.pop(best, None)
+            for p in touched:
+                c = pair_counts.get(p)
+                if c:
+                    heapq.heappush(heap, (-c, p[0], p[1]))
             if progress and (m % 25 == 0 or m == n_merges - 1):
                 progress(m + 1, n_merges, vocab[-1])
         return cls(merges)

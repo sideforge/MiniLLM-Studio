@@ -5,6 +5,7 @@ wird. Alle Einträge wurden gegen den Hugging Face Hub getestet (streaming).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ from typing import Callable, Iterator
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(os.environ.get("MINILLM_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
 RAW_DIR = DATA_DIR / "raw"
 
 
@@ -26,6 +27,37 @@ def _instruct(instruction: str, context: str, answer: str) -> str:
     if context and context.strip():
         out += f"### Kontext:\n{context.strip()}\n"
     return out + f"### Antwort:\n{answer.strip()}"
+
+
+
+def render_value(v) -> str:
+    """Macht aus beliebigen Zellen Text: Strings bleiben, Chat-Listen werden zu Frage/Antwort, Listen werden verbunden."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    if isinstance(v, list):
+        if v and all(isinstance(m, dict) for m in v):
+            parts = []
+            for m in v:
+                role = str(m.get("role") or m.get("from") or "")
+                content = m["content"] if "content" in m else m.get("value", m.get("text"))
+                if content is None:
+                    content = json.dumps(m, ensure_ascii=False)
+                if role in ("user", "human", "prompter"):
+                    label = "### Frage:"
+                elif role in ("assistant", "gpt", "bot", "model"):
+                    label = "### Antwort:"
+                else:
+                    label = f"### {role}:" if role else ""
+                parts.append((label + "\n" if label else "") + str(content).strip())
+            return "\n".join(parts)
+        return "\n".join(render_value(x) for x in v)
+    if isinstance(v, dict):
+        return "\n".join(f"{k}: {render_value(x)}" for k, x in v.items())
+    return str(v)
 
 
 @dataclass
@@ -254,6 +286,50 @@ CATALOG: list[DatasetInfo] = [
         lambda r: r["text"], config="wikitext-103-raw-v1", size_hint="~540 MB", difficulty="mittel",
         min_chars=40,
     ),
+    # ------------------------------------------------- Anspruchsvoll (für starke Modelle)
+    DatasetInfo(
+        "finemath", "FineMath (Mathematik-Webseiten)", "HuggingFaceTB/finemath",
+        "Sorgfältig gefilterte Webseiten mit Mathematik, Formeln und Herleitungen – Trainingsdaten moderner "
+        "Open-Source-Modelle.", "Wissen", "en", lambda r: r["text"], config="finemath-4plus",
+        size_hint="~10 Mrd. Tokens", difficulty="sehr schwer", min_chars=300, max_chars=8000,
+        tags=["streaming", "mathe"],
+    ),
+    DatasetInfo(
+        "openr1_math", "OpenR1-Math (Aufgaben + Lösungsweg)", "open-r1/OpenR1-Math-220k",
+        "220k anspruchsvolle Mathe-Aufgaben (Wettbewerbs-Niveau) mit ausführlicher Lösung.", "Wissen", "en",
+        lambda r: _instruct(r["problem"], "", r["solution"]), config="default", size_hint="220k Aufgaben",
+        difficulty="sehr schwer", min_chars=100, max_chars=6000, tags=["chat", "mathe"],
+    ),
+    DatasetInfo(
+        "openmath2", "OpenMathInstruct-2", "nvidia/OpenMathInstruct-2",
+        "Millionen Mathe-Aufgaben mit Lösungen (NVIDIA).", "Wissen", "en",
+        lambda r: _instruct(r["problem"], "", r["generated_solution"]), size_hint="~14 Mio. Beispiele",
+        difficulty="sehr schwer", min_chars=60, max_chars=6000, tags=["chat", "mathe", "streaming"],
+    ),
+    DatasetInfo(
+        "codefeedback", "CodeFeedback (Code-Fragen, viele Sprachen)", "m-a-p/CodeFeedback-Filtered-Instruction",
+        "Gefilterte Programmier-Fragen mit Antworten – Python, Java, C++, JavaScript, SQL u. a.", "Code", "en",
+        lambda r: _instruct(r["query"], "", r["answer"]), size_hint="~156k Beispiele", difficulty="schwer",
+        min_chars=60, max_chars=6000, tags=["empfohlen", "chat"],
+    ),
+    DatasetInfo(
+        "smoltalk", "SmolTalk (Chat-Mix von Hugging Face)", "HuggingFaceTB/smoltalk",
+        "Grosse Mischung aus Dialogen, Aufgaben, Code und Mathe – damit werden SmolLM-Chatmodelle feingetrimmt.",
+        "Anweisungen", "en", lambda r: render_value(r["messages"]), config="all", size_hint="~1 Mio. Dialoge",
+        difficulty="sehr schwer", min_chars=60, max_chars=6000, tags=["chat", "streaming"],
+    ),
+    DatasetInfo(
+        "tulu3", "Tulu-3 SFT-Mischung", "allenai/tulu-3-sft-mixture",
+        "Die Anweisungs-Mischung des Allen Institute (Wissen, Code, Mathe, Sicherheit).", "Anweisungen", "multi",
+        lambda r: render_value(r["messages"]), size_hint="~940k Dialoge", difficulty="sehr schwer", min_chars=60,
+        max_chars=6000, tags=["chat", "streaming"],
+    ),
+    DatasetInfo(
+        "slimorca", "SlimOrca (GPT-4-Antworten)", "Open-Orca/SlimOrca",
+        "~500k Aufgaben mit ausführlichen Antworten von GPT-4, mit Begründung Schritt für Schritt.", "Anweisungen",
+        "en", lambda r: render_value(r["conversations"]), size_hint="~518k Dialoge", difficulty="schwer",
+        min_chars=60, max_chars=6000, tags=["chat"],
+    ),
     DatasetInfo(
         "guanaco", "Guanaco (mehrsprachiger Chat, 1k)", "mlabonne/guanaco-llama2-1k",
         "1000 Chat-Beispiele in mehreren Sprachen – winzig.", "Anweisungen", "multi",
@@ -317,3 +393,11 @@ def fetch_dataset(key: str, max_docs: int, progress: Callable[[int, int], None] 
 def read_documents(path: Path) -> list[str]:
     raw = Path(path).read_text(encoding="utf-8")
     return [d.strip() for d in raw.split(EOT) if d.strip()]
+
+
+# Gespeicherte eigene Datensätze (data/custom_datasets.json) in den Katalog einhängen. Das Modul registriert sie am Ende
+# seiner eigenen Datei – so klappt es unabhängig davon, ob zuerst catalog oder custom importiert wird.
+try:
+    from . import custom as _custom  # noqa: F401
+except Exception:      # pragma: no cover - ein kaputter Eintrag darf die App nie am Starten hindern
+    pass

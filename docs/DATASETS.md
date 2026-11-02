@@ -1,7 +1,8 @@
 # Datensatz-Katalog
 
-Alle 34 Datensätze wurden gegen den Hugging Face Hub getestet (Streaming, die ersten Zeilen lesbar).
+Alle 41 Datensätze wurden gegen den Hugging Face Hub getestet (Streaming, die ersten Zeilen lesbar).
 Die App lädt immer nur so viele Dokumente, wie du einstellst – nichts wird komplett heruntergeladen.
+Zusätzlich kannst du in der App **beliebige eigene Datensätze** vom Hub hinzufügen (siehe README).
 
 | Name | Kategorie | Sprache | Grösse | Schwierigkeit | Hugging-Face-Repo |
 |---|---|---|---|---|---|
@@ -9,7 +10,11 @@ Die App lädt immer nur so viele Dokumente, wie du einstellst – nichts wird ko
 | **Dolly 15k (Anweisungen)** | Anweisungen | EN | 15k Beispiele | mittel | [databricks/databricks-dolly-15k](https://huggingface.co/datasets/databricks/databricks-dolly-15k) |
 | **Guanaco (mehrsprachiger Chat, 1k)** | Anweisungen | mehrsprachig | 1k Beispiele | mittel | [mlabonne/guanaco-llama2-1k](https://huggingface.co/datasets/mlabonne/guanaco-llama2-1k) |
 | **OpenAssistant (mehrsprachig)** | Anweisungen | mehrsprachig | ~85k Nachrichten | schwer | [OpenAssistant/oasst1](https://huggingface.co/datasets/OpenAssistant/oasst1) |
+| **SlimOrca (GPT-4-Antworten)** | Anweisungen | EN | ~518k Dialoge | schwer | [Open-Orca/SlimOrca](https://huggingface.co/datasets/Open-Orca/SlimOrca) |
+| **SmolTalk (Chat-Mix von Hugging Face)** | Anweisungen | EN | ~1 Mio. Dialoge | sehr schwer | [HuggingFaceTB/smoltalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk) |
+| **Tulu-3 SFT-Mischung** | Anweisungen | mehrsprachig | ~940k Dialoge | sehr schwer | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) |
 | **CodeAlpaca (20k)** | Code | EN | 20k Beispiele | leicht | [sahil2801/CodeAlpaca-20k](https://huggingface.co/datasets/sahil2801/CodeAlpaca-20k) |
+| **CodeFeedback (Code-Fragen, viele Sprachen)** | Code | EN | ~156k Beispiele | schwer | [m-a-p/CodeFeedback-Filtered-Instruction](https://huggingface.co/datasets/m-a-p/CodeFeedback-Filtered-Instruction) |
 | **Evol-Instruct Code (80k)** | Code | EN | 80k Beispiele | schwer | [nickrosh/Evol-Instruct-Code-80k-v1](https://huggingface.co/datasets/nickrosh/Evol-Instruct-Code-80k-v1) |
 | **Magicoder (Aufgabe + Lösung, viele Sprachen)** | Code | EN | 75k Beispiele | mittel | [ise-uiuc/Magicoder-OSS-Instruct-75K](https://huggingface.co/datasets/ise-uiuc/Magicoder-OSS-Instruct-75K) |
 | **Python-Code (18k)** | Code | EN | 18k Beispiele | schwer | [iamtarun/python_code_instructions_18k_alpaca](https://huggingface.co/datasets/iamtarun/python_code_instructions_18k_alpaca) |
@@ -33,7 +38,10 @@ Die App lädt immer nur so viele Dokumente, wie du einstellst – nichts wird ko
 | **The Pile (ohne Urheberrechtsmaterial)** | Web | EN | ~1 Bio. Zeichen | schwer | [monology/pile-uncopyrighted](https://huggingface.co/datasets/monology/pile-uncopyrighted) |
 | **Cosmopedia (100k)** | Wissen | EN | 100k Texte | mittel | [HuggingFaceTB/cosmopedia-100k](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-100k) |
 | **Cosmopedia v2 (SmolLM-Korpus)** | Wissen | EN | 39 Mio. Texte | mittel | [HuggingFaceTB/smollm-corpus](https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus) |
+| **FineMath (Mathematik-Webseiten)** | Wissen | EN | ~10 Mrd. Tokens | sehr schwer | [HuggingFaceTB/finemath](https://huggingface.co/datasets/HuggingFaceTB/finemath) |
 | **GSM8K (Mathe)** | Wissen | EN | 7.5k Aufgaben | schwer | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) |
+| **OpenMathInstruct-2** | Wissen | EN | ~14 Mio. Beispiele | sehr schwer | [nvidia/OpenMathInstruct-2](https://huggingface.co/datasets/nvidia/OpenMathInstruct-2) |
+| **OpenR1-Math (Aufgaben + Lösungsweg)** | Wissen | EN | 220k Aufgaben | sehr schwer | [open-r1/OpenR1-Math-220k](https://huggingface.co/datasets/open-r1/OpenR1-Math-220k) |
 | **OpenWebMath** | Wissen | EN | 6 Mio. Dokumente | schwer | [open-web-math/open-web-math](https://huggingface.co/datasets/open-web-math/open-web-math) |
 | **WikiText-103** | Wissen | EN | ~540 MB | mittel | [Salesforce/wikitext](https://huggingface.co/datasets/Salesforce/wikitext) |
 | **WikiText-2** | Wissen | EN | ~11 MB | mittel | [Salesforce/wikitext](https://huggingface.co/datasets/Salesforce/wikitext) |
@@ -46,7 +54,11 @@ Die App lädt immer nur so viele Dokumente, wie du einstellst – nichts wird ko
 - **Dolly 15k (Anweisungen)** – 15k von Menschen geschriebene Anweisungen und Antworten.
 - **Guanaco (mehrsprachiger Chat, 1k)** – 1000 Chat-Beispiele in mehreren Sprachen – winzig.
 - **OpenAssistant (mehrsprachig)** – Von Freiwilligen geschriebene Chat-Nachrichten in vielen Sprachen (auch Deutsch).
+- **SlimOrca (GPT-4-Antworten)** – ~500k Aufgaben mit ausführlichen Antworten von GPT-4, mit Begründung Schritt für Schritt.
+- **SmolTalk (Chat-Mix von Hugging Face)** – Grosse Mischung aus Dialogen, Aufgaben, Code und Mathe – damit werden SmolLM-Chatmodelle feingetrimmt.
+- **Tulu-3 SFT-Mischung** – Die Anweisungs-Mischung des Allen Institute (Wissen, Code, Mathe, Sicherheit).
 - **CodeAlpaca (20k)** – 20k kurze Code-Aufgaben – klein, sauber, ideal zum schnellen Ausprobieren.
+- **CodeFeedback (Code-Fragen, viele Sprachen)** – Gefilterte Programmier-Fragen mit Antworten – Python, Java, C++, JavaScript, SQL u. a.
 - **Evol-Instruct Code (80k)** – 80k immer schwieriger gemachte Programmieraufgaben mit ausführlichen Antworten.
 - **Magicoder (Aufgabe + Lösung, viele Sprachen)** – 75k Programmieraufgaben mit Lösungen in Python, C++, Java, Rust, TypeScript u. a. – von einem grossen Modell aus echtem Open-Source-Code erzeugt.
 - **Python-Code (18k)** – Python-Aufgaben mit Lösungs-Code.
@@ -70,7 +82,10 @@ Die App lädt immer nur so viele Dokumente, wie du einstellst – nichts wird ko
 - **The Pile (ohne Urheberrechtsmaterial)** – Bunter Mix aus Web, Büchern, arXiv-Papern, GitHub-Code, Foren und Wikipedia – wie ein Mini-Internet.
 - **Cosmopedia (100k)** – Synthetische Lehrbuch-Texte, Blogposts und Geschichten, von einem grossen Modell geschrieben. Sehr saubere Daten.
 - **Cosmopedia v2 (SmolLM-Korpus)** – Hochwertige synthetische Lehrbuch-Texte, Blogposts und Erklärungen – damit wurde SmolLM trainiert. Sehr gut, um ein kleines Modell zusammenhängend schreiben zu lassen.
+- **FineMath (Mathematik-Webseiten)** – Sorgfältig gefilterte Webseiten mit Mathematik, Formeln und Herleitungen – Trainingsdaten moderner Open-Source-Modelle.
 - **GSM8K (Mathe)** – Mathe-Textaufgaben mit Lösungsweg. Für kleine Modelle fast unmöglich – aber lehrreich!
+- **OpenMathInstruct-2** – Millionen Mathe-Aufgaben mit Lösungen (NVIDIA).
+- **OpenR1-Math (Aufgaben + Lösungsweg)** – 220k anspruchsvolle Mathe-Aufgaben (Wettbewerbs-Niveau) mit ausführlicher Lösung.
 - **OpenWebMath** – Mathematik-Webseiten mit Formeln (LaTeX), Beweisen und Erklärungen.
 - **WikiText-103** – Die grosse Variante von WikiText: 100 Mio. Wörter geprüfter Wikipedia-Artikel.
 - **WikiText-2** – Saubere englische Wikipedia-Artikel (Qualitäts-Artikel). Kleiner Standard-Benchmark der Sprachmodell-Forschung.

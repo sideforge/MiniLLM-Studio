@@ -40,7 +40,7 @@ with st.sidebar:
     else:
         st.caption("Noch kein Datensatz vorbereitet.")
     di = dev.describe()
-    st.markdown(f"**{'🟢 GPU' if di['type'] != 'cpu' else '⚪ CPU'}:** {di['name']}")
+    st.markdown(f"**🟢 GPU:** {di['name']}" if di["type"] != "cpu" else "**⚪ Rechengerät:** CPU")
     if di["type"] == "cpu":
         st.caption(di["hint"])
     t = store()["trainer"]

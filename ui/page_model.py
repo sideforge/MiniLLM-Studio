@@ -14,6 +14,8 @@ PRESETS = {
     "Klein": dict(m_layer=4, m_embd=128, m_head=4, m_block=128),
     "Mittel": dict(m_layer=6, m_embd=256, m_head=8, m_block=128),
     "Gross": dict(m_layer=8, m_embd=384, m_head=6, m_block=256),
+    "Riesig": dict(m_layer=12, m_embd=768, m_head=12, m_block=512),      # ca. 90 Mio. Parameter
+    "Extrem": dict(m_layer=16, m_embd=1024, m_head=16, m_block=512),     # ca. 210 Mio. Parameter
 }
 DEFAULTS = dict(PRESETS["Klein"], m_drop=0.0)
 EMBD_OPTIONS = [32, 48, 64, 96, 128, 192, 256, 288, 384, 512, 640, 768, 1024]
@@ -122,6 +124,9 @@ def render() -> None:
     ratio = meta["tokens_train"] / n
     c[3].metric("Daten-Tokens pro Parameter", f"{ratio:.1f}",
                 help="Faustregel (Chinchilla): ca. 20 Tokens pro Parameter sind optimal.")
+    if not on_gpu and n > 15_000_000:
+        st.warning(f"Ein Modell mit {fmt_int(n)} Parametern ist auf der **CPU sehr langsam** (Stunden bis Tage). "
+                   "Dafür ist eine GPU gedacht – oder wähle eine kleinere Vorlage.")
     if ratio < 5:
         st.warning("Das Modell ist im Verhältnis zu den Daten gross → es wird die Daten eher **auswendig lernen** "
                    "(Overfitting). Nimm mehr Daten oder ein kleineres Modell.")

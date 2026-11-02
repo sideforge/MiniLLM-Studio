@@ -166,3 +166,111 @@ def test_suggest_model_scales_with_gpu_memory():
     for m in (4, 8, 12, 24, 48):
         d = dev.suggest_model(m)
         assert d["m_embd"] % d["m_head"] == 0
+
+
+def naive_bpe(texts, n_merges):
+    """Langsame, aber offensichtlich richtige Referenz: zählt vor jedem Merge alle Paare neu."""
+    from collections import Counter
+    from minillm.tokenizer import _PRETOKEN
+    wc = Counter(w for t in texts for w in _PRETOKEN.findall(t))
+    words = {w: list(w.encode()) for w in wc}
+    merges = []
+    for m in range(n_merges):
+        pc = Counter()
+        for w, ids in words.items():
+            for p in zip(ids, ids[1:]):
+                pc[p] += wc[w]
+        if not pc:
+            break
+        best = max(pc.items(), key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))[0]
+        if pc[best] < 2:
+            break
+        merges.append(best)
+        for w, ids in words.items():
+            out, i = [], 0
+            while i < len(ids):
+                if i < len(ids) - 1 and (ids[i], ids[i + 1]) == best:
+                    out.append(256 + m)
+                    i += 2
+                else:
+                    out.append(ids[i])
+                    i += 1
+            words[w] = out
+    return merges
+
+
+def test_heap_bpe_matches_naive_reference():
+    import random
+    rng = random.Random(7)
+    syll = ["ka", "to", "mi", "ra", "ne", "so", "lu", "pe", "ti", "an", "er", "st", "ch", "aa", "bb"]
+    texts = [" ".join("".join(rng.choice(syll) for _ in range(rng.randint(1, 4))) for _ in range(30)) for _ in range(40)]
+    texts += ["aaa aaaa aaaaa aaaaaa", "def f(x):\n    return x\n" * 5]
+    tok = BPETokenizer.train(texts, 256 + 120 + 1)
+    assert tok.merges == naive_bpe(texts, 120)
+
+
+# ---------------------------------------------------------- Eigene Datensätze
+def test_render_value_handles_chat_lists_and_nesting():
+    from minillm.catalog import render_value
+    chat = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hallo"}]
+    assert render_value(chat) == "### Frage:\nHi\n### Antwort:\nHallo"
+    sharegpt = [{"from": "human", "value": "A"}, {"from": "gpt", "value": "B"}]
+    assert "### Frage:\nA" in render_value(sharegpt) and "### Antwort:\nB" in render_value(sharegpt)
+    assert render_value(None) == "" and render_value(5) == "5" and render_value(["a", "b"]) == "a\nb"
+
+
+def test_detect_columns_prefers_text_chat_and_qa_pairs():
+    from minillm.custom import detect_columns
+    assert detect_columns({"id": "1", "text": "hello world, a long text", "url": "x"}) == ["text"]
+    assert detect_columns({"prompt_id": "x", "messages": [{"role": "user", "content": "a"}]}) == ["messages"]
+    assert detect_columns({"instruction": "do it", "output": "done", "id": 3}) == ["instruction", "output"]
+    assert detect_columns({"id": "abc", "story_body": "x" * 50, "title": "t"}) in (["story_body"], ["title"])
+    assert detect_columns({"n": 1}) == []
+
+
+def test_custom_dataset_roundtrip(tmp_path, monkeypatch):
+    from minillm import custom
+    from minillm.catalog import BY_KEY, CATALOG
+    monkeypatch.setattr(custom, "CUSTOM_FILE", tmp_path / "custom.json")
+    n = len(CATALOG)
+    info = custom.add_custom("someone/some-data", ["question", "answer"], None, "train", headings=True, max_chars=500)
+    try:
+        assert info.key in BY_KEY and len(CATALOG) == n + 1 and info.category == "Eigene"
+        assert info.fmt({"question": "Q?", "answer": "A!", "x": 1}) == "### question:\nQ?\n### answer:\nA!"
+        # erneutes Hinzufügen ersetzt statt zu verdoppeln
+        custom.add_custom("someone/some-data", ["question"], None, "train")
+        assert len(CATALOG) == n + 1 and len(custom._read()) == 1
+    finally:
+        custom.remove_custom(info.key)
+    assert info.key not in BY_KEY and len(CATALOG) == n and custom._read() == []
+
+
+def test_friendly_errors():
+    from minillm.custom import friendly_error
+    assert "Lade-Skript" in friendly_error(RuntimeError("Dataset scripts are no longer supported, but found x.py"))
+    assert "gesperrt" in friendly_error(Exception("Dataset 'a/b' is a gated dataset on the Hub. You must be authenticated"))
+    assert "nicht gefunden" in friendly_error(Exception("Dataset 'a/b' doesn't exist on the Hub"))
+
+
+def test_catalog_entries_are_complete():
+    from minillm.catalog import CATALOG
+    keys = [d.key for d in CATALOG]
+    assert len(keys) == len(set(keys)), "doppelte Schlüssel im Katalog"
+    assert any(d.category == "Code" for d in CATALOG) and len(CATALOG) >= 40
+
+
+def test_saved_custom_datasets_load_in_both_import_orders(tmp_path):
+    """Regression: gespeicherte eigene Datensätze müssen nach einem Neustart im Katalog sein, egal was zuerst importiert wird."""
+    import json
+    import os
+    import subprocess
+    import sys
+    (tmp_path / "custom_datasets.json").write_text(json.dumps([{
+        "key": "custom_x", "repo": "a/b", "config": None, "split": "train", "columns": ["text"],
+        "headings": False, "min_chars": 1, "max_chars": None}]), encoding="utf-8")
+    env = {**os.environ, "MINILLM_DATA_DIR": str(tmp_path)}
+    for first in ("from minillm import custom", "import minillm.catalog"):
+        code = first + "\nfrom minillm.catalog import BY_KEY\nprint('custom_x' in BY_KEY)"
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
+                             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        assert out.stdout.strip() == "True", (first, out.stdout, out.stderr[-300:])

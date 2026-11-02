@@ -62,7 +62,7 @@ Die App führt mit sechs Seiten durch den ganzen Weg von den Rohdaten bis zum fe
 Voraussetzung: **Python 3.10+**. Eine Grafikkarte ist *nicht* nötig – alles läuft auf der CPU.
 
 ```bash
-git clone <DEIN-REPO>
+git clone https://github.com/sideforge/MiniLLM-Studio.git
 cd MiniLLM-Studio
 pip install -r requirements.txt
 streamlit run app.py

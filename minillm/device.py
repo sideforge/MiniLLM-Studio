@@ -129,3 +129,47 @@ def find_max_batch(make_model, block_size: int, vocab_size: int, device: torch.d
             if device.type == "cuda":
                 torch.cuda.empty_cache()
     return max(start, int(best * 0.9) // 8 * 8)   # etwas Luft lassen (Evaluation, Snapshots)
+
+
+# ------------------------------------------------------------ Live-Messung & Empfehlungen
+_stats_cache: dict = {"t": 0.0, "v": None}
+
+
+def gpu_stats(max_age: float = 0.8) -> dict | None:
+    """Echte GPU-Auslastung per nvidia-smi (nur NVIDIA). Gibt None zurück, wenn nichts gemessen werden kann."""
+    import time
+    if time.time() - _stats_cache["t"] < max_age:
+        return _stats_cache["v"]
+    value = None
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,power.limit,temperature.gpu",
+                 "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=3).stdout.strip().splitlines()[0]
+            u, mu, mt, pd_, pl, t = [float(v) if v.strip() not in ("", "[N/A]") else 0.0 for v in out.split(",")]
+            value = {"util": u, "mem_used_gb": mu / 1024, "mem_total_gb": mt / 1024, "power_w": pd_,
+                     "power_limit_w": pl, "temp_c": t}
+        except Exception:
+            value = None
+    _stats_cache.update(t=time.time(), v=value)
+    return value
+
+
+def can_compile(device: torch.device) -> bool:
+    """torch.compile fusioniert viele kleine GPU-Operationen zu wenigen grossen. Braucht Triton (NVIDIA)."""
+    import importlib.util
+    return device.type == "cuda" and importlib.util.find_spec("triton") is not None
+
+
+def suggest_model(mem_gb: float | None) -> dict:
+    """Modellgrösse, die zur Grafikkarte passt. Ein zu kleines Modell kann eine grosse GPU nie auslasten."""
+    mem = mem_gb or 8.0
+    if mem >= 40:
+        return dict(m_layer=20, m_embd=1024, m_head=16, m_block=512)
+    if mem >= 20:
+        return dict(m_layer=16, m_embd=1024, m_head=16, m_block=512)
+    if mem >= 11:
+        return dict(m_layer=12, m_embd=768, m_head=12, m_block=512)
+    if mem >= 7:
+        return dict(m_layer=12, m_embd=512, m_head=8, m_block=512)
+    return dict(m_layer=8, m_embd=384, m_head=6, m_block=256)

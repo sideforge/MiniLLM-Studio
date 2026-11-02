@@ -41,6 +41,7 @@ class TrainConfig:
     threads: int = 0                 # CPU-Threads, 0 = automatisch (nur relevant ohne GPU)
     device: str = "auto"             # "auto" = beste GPU, sonst CPU; "cpu" erzwingt die CPU
     amp: bool = True                 # Mixed Precision (bf16/fp16) auf der GPU
+    compile: bool = True             # torch.compile, wenn möglich (NVIDIA + Triton); sonst automatisch aus
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -193,6 +194,18 @@ class Trainer:
             opt = self.model.configure_optimizer(cfg.lr, cfg.weight_decay)
             self.model.train()
             # fp16 braucht "Loss-Scaling"; bf16 und CPU nicht (dann ist der Scaler ein No-Op)
+            fwd = self.model                # Modell, das im Trainingsschritt benutzt wird (evtl. kompiliert)
+            if cfg.compile and dev.can_compile(self.device):
+                try:
+                    fwd = torch.compile(self.model)
+                    xw, yw = batcher.get("train", min(cfg.batch_size, 8), gen)      # Aufwärmen: Kompilieren dauert ~1 Min.
+                    with dev.autocast(self.device, cfg.amp):
+                        fwd(xw, yw)[1].backward()
+                    self.model.zero_grad(set_to_none=True)
+                    self.device_info["compiled"] = True
+                except Exception:              # Kompilieren ist nur ein Bonus – bei Problemen normal weiterrechnen
+                    fwd = self.model
+                    self.device_info["compiled"] = False
             scaler = torch.amp.GradScaler(self.device.type, enabled=cfg.amp and dev.amp_dtype(self.device) == torch.float16
                                           and self.device.type == "cuda")
 
@@ -227,7 +240,7 @@ class Trainer:
                     g["lr"] = lr
                 x, y = batcher.get("train", cfg.batch_size, gen)
                 with dev.autocast(self.device, cfg.amp):
-                    _, loss = self.model(x, y)
+                    _, loss = fwd(x, y)
                 opt.zero_grad(set_to_none=True)
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)

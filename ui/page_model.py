@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from minillm import device as dev
 from minillm.model import GPT, GPTConfig
 from ui.common import PALETTE, fmt_int, hero, need_data, next_step, restore_state, save_state, style_fig
 
@@ -15,12 +16,18 @@ PRESETS = {
     "Gross": dict(m_layer=8, m_embd=384, m_head=6, m_block=256),
 }
 DEFAULTS = dict(PRESETS["Klein"], m_drop=0.0)
-EMBD_OPTIONS = [32, 48, 64, 96, 128, 192, 256, 288, 384, 512]
-BLOCK_OPTIONS = [32, 64, 128, 192, 256, 384, 512]
+EMBD_OPTIONS = [32, 48, 64, 96, 128, 192, 256, 288, 384, 512, 640, 768, 1024]
+BLOCK_OPTIONS = [32, 64, 128, 192, 256, 384, 512, 1024]
 
 
 def _apply_preset(name: str) -> None:
     for k, v in PRESETS[name].items():
+        st.session_state[k] = v
+
+
+def _apply_gpu_max() -> None:
+    """Modell so gross wählen, dass die GPU wirklich zu tun hat (abhängig vom Grafikspeicher)."""
+    for k, v in dev.suggest_model(dev.describe()["memory_gb"]).items():
         st.session_state[k] = v
 
 
@@ -71,10 +78,16 @@ def render() -> None:
     meta = need_data()
     restore_state("model", DEFAULTS)
 
+    info = dev.describe()
+    on_gpu = info["type"] != "cpu"
     st.write("**Schnell-Vorlagen:**")
-    pc = st.columns(len(PRESETS))
+    pc = st.columns(len(PRESETS) + 1)
     for col, name in zip(pc, PRESETS):
         col.button(name, key=f"preset_{name}", on_click=_apply_preset, args=(name,), width="stretch")
+    pc[-1].button("🚀 GPU-Maximum", key="preset_gpumax", on_click=_apply_gpu_max, width="stretch", type="primary",
+                  disabled=not on_gpu,
+                  help=("Wählt die grösste sinnvolle Modellgrösse für deinen Grafikspeicher, damit die GPU voll "
+                        "ausgelastet ist." if on_gpu else "Keine GPU gefunden."))
 
     left, right = st.columns([0.4, 0.6], gap="large")
     with left:
@@ -86,7 +99,7 @@ def render() -> None:
             st.session_state["m_head"] = min(heads, key=lambda h: abs(h - st.session_state["m_head"]))
         st.select_slider("Aufmerksamkeits-Köpfe", heads, key="m_head",
                          help="Jeder Kopf schaut auf andere Zusammenhänge im Text.")
-        st.slider("Anzahl Schichten (Tiefe)", 1, 12, key="m_layer")
+        st.slider("Anzahl Schichten (Tiefe)", 1, 24, key="m_layer")
         st.select_slider("Kontextlänge (Tokens)", BLOCK_OPTIONS, key="m_block",
                          help="So viele Tokens kann das Modell gleichzeitig überblicken.")
         st.slider("Dropout", 0.0, 0.3, step=0.05, key="m_drop",

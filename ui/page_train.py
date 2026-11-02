@@ -178,7 +178,18 @@ def _dashboard() -> None:
     di = trainer.device_info
     if di:
         st.caption(f"Gerät: **{di['name']}**" + (f" ({di['memory_gb']:.0f} GB)" if di.get("memory_gb") else "")
-                   + f" · Batch {cfg.batch_size} · Mixed Precision: {'ja' if cfg.amp and di.get('amp') else 'nein'}")
+                   + f" · Batch {cfg.batch_size} · Mixed Precision: {'ja' if cfg.amp and di.get('amp') else 'nein'}"
+                   + (" · torch.compile: ja" if di.get("compiled") else ""))
+    gs = dev.gpu_stats() if trainer.device.type == "cuda" else None
+    if gs:
+        g = st.columns(4)
+        g[0].metric("GPU-Auslastung", f"{gs['util']:.0f} %", help="Wie viel der Zeit die GPU rechnet (nvidia-smi). Ziel: 90–100 %.")
+        g[1].metric("Grafikspeicher", f"{gs['mem_used_gb']:.1f} / {gs['mem_total_gb']:.0f} GB")
+        g[2].metric("Leistung", f"{gs['power_w']:.0f} / {gs['power_limit_w']:.0f} W")
+        g[3].metric("Temperatur", f"{gs['temp_c']:.0f} °C")
+        if running and trainer.step > 30 and gs["util"] < 70:
+            st.info("💡 Die GPU wird noch nicht voll genutzt – das Modell ist zu klein für diese Karte. Auf der Seite "
+                    "**🧠 Modell** gibt es den Knopf **„🚀 GPU-Maximum“**, und die Batch-Grösse sollte auf „Auto“ stehen.")
     st.progress(min(1.0, trainer.step / cfg.max_steps),
                 text=f"{trainer.tokens_seen:,} Tokens gesehen · {trainer.n_params:,} Parameter · "
                      f"Laufzeit {fmt_time(trainer.elapsed)}")

@@ -146,3 +146,23 @@ def test_short_training_run_with_auto_batch(tmp_path, monkeypatch):
     assert tr.cfg.batch_size == 16                    # Auto auf der CPU
     assert [m["step"] for m in tr.metrics] == list(range(1, 31))
     assert (tmp_path / "runs" / "t" / "model.pt").exists()
+
+
+def test_gpu_helpers_degrade_gracefully_without_gpu():
+    from minillm import device as dev
+    cpu = torch.device("cpu")
+    assert dev.can_compile(cpu) is False
+    if not torch.cuda.is_available():
+        assert dev.gpu_stats() is None or isinstance(dev.gpu_stats(), dict)
+
+
+def test_suggest_model_scales_with_gpu_memory():
+    from minillm import device as dev
+    sizes = [GPT.estimate_params(GPTConfig(vocab_size=2048, **{k.replace("m_", "n_").replace("n_embd", "n_embd"): v
+                                                                for k, v in dev.suggest_model(m).items()
+                                                                if k != "m_block"}, block_size=dev.suggest_model(m)["m_block"]))
+             for m in (4, 8, 12, 24, 48)]
+    assert sizes == sorted(sizes) and sizes[0] < sizes[-1]
+    for m in (4, 8, 12, 24, 48):
+        d = dev.suggest_model(m)
+        assert d["m_embd"] % d["m_head"] == 0

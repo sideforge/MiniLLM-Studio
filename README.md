@@ -97,6 +97,18 @@ Training-Dashboard. Damit die GPU wirklich **voll ausgelastet** ist:
 | **Daten im GPU-Speicher** | Die Batches entstehen direkt auf der GPU, die Karte wartet nie auf die CPU |
 | **Fused AdamW** | Der ganze Optimierungs-Schritt ist ein einziger GPU-Kernel |
 | **Seltenes Synchronisieren** | Loss und Gradienten werden nur alle 10 Schritte von der GPU geholt, damit sie nie ins Leere läuft |
+| **`torch.compile`** | Fasst viele kleine GPU-Operationen zu wenigen grossen zusammen (nur NVIDIA mit Triton, sonst automatisch aus) |
+
+**Prüfen, ob die GPU wirklich voll arbeitet.** Im Training-Dashboard erscheint bei NVIDIA-Karten eine Live-Anzeige
+mit **GPU-Auslastung in %**, Grafikspeicher, Leistung in Watt und Temperatur (gemessen mit `nvidia-smi`). Das Ziel sind
+90–100 %. Liegt die Auslastung darunter, sagt die App es dir.
+
+**Wichtig: Ein winziges Modell kann eine grosse GPU nicht auslasten**, egal wie gut der Code ist. Es hat schlicht zu
+wenig zu rechnen. Darum gibt es auf der Seite **🧠 Modell** den Knopf **„🚀 GPU-Maximum“**: Er wählt abhängig vom
+Grafikspeicher die passende Grösse (z. B. ca. 12 Schichten · Breite 768 ab 12 GB, ca. 16 Schichten · Breite 1024 ab
+20 GB). Zusammen mit dem Auto-Batch wird die Karte dann so ausgelastet, wie es mit PyTorch geht. Für die letzten
+Prozente kann in der NVIDIA-Systemsteuerung noch **„Energieverwaltung: Maximale Leistung bevorzugen“** und in Windows
+der Energiesparplan **„Höchstleistung“** helfen.
 
 **PyTorch mit GPU-Unterstützung installieren.** Das normale `pip install torch` liefert unter Windows oft die reine
 CPU-Version. Zeigt die App „CPU“, obwohl eine NVIDIA-Karte eingebaut ist, dann den passenden Befehl auf
